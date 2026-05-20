@@ -1,70 +1,73 @@
 #!/usr/bin/env node
 /**
- * Cross-platform widget builder.
+ * Bundle the embeddable widget using esbuild's JavaScript API.
  *
- * Runs automatically before `next build` (via the "prebuild" npm script).
- * On Vercel: produces a fresh widget.js as part of every deploy.
- * Locally: same thing, no manual copy step needed.
+ * Why this approach (instead of `cd ../widget && npm run build`):
+ *   - esbuild is already a devDependency of frontend/ — no second install needed
+ *   - Vercel sets NODE_ENV=production, which makes nested `npm install` skip
+ *     devDependencies — that's what was breaking the previous build
+ *   - One process, one set of dependencies, one source of truth
  *
- * Steps:
- *   1. cd ../widget
- *   2. npm install (deps: esbuild, typescript)
- *   3. npm run build (esbuild minified bundle)
- *   4. copy widget/dist/widget.js -> frontend/public/widget.js
+ * The widget source lives at widget/src/widget.ts. This script reads it
+ * directly and outputs frontend/public/widget.js — which Vercel then serves
+ * as a static asset at https://your-app.vercel.app/widget.js
  */
-const { execSync } = require("child_process");
-const fs = require("fs");
 const path = require("path");
+const fs = require("fs");
 
-const widgetDir = path.resolve(__dirname, "..", "..", "widget");
-const publicDir = path.resolve(__dirname, "..", "public");
+const ENTRY = path.resolve(__dirname, "..", "..", "widget", "src", "widget.ts");
+const OUTPUT_DIR = path.resolve(__dirname, "..", "public");
+const OUTPUT = path.join(OUTPUT_DIR, "widget.js");
 
-function step(msg) {
-  console.log("\n──▶ " + msg);
+async function main() {
+  console.log("──▶ Building embeddable widget");
+
+  if (!fs.existsSync(ENTRY)) {
+    console.error("✗ Widget source not found at: " + ENTRY);
+    console.error("  Make sure the repo includes the `widget/` directory.");
+    process.exit(1);
+  }
+
+  // Require esbuild from frontend's own node_modules (always installed by Vercel)
+  let esbuild;
+  try {
+    esbuild = require("esbuild");
+  } catch (e) {
+    console.error("✗ esbuild is not installed. It must be in frontend/devDependencies.");
+    console.error("  Fix: npm install --save-dev esbuild");
+    process.exit(1);
+  }
+
+  fs.mkdirSync(OUTPUT_DIR, { recursive: true });
+
+  console.log("──▶ Bundling " + path.relative(process.cwd(), ENTRY));
+  const t0 = Date.now();
+
+  try {
+    await esbuild.build({
+      entryPoints: [ENTRY],
+      bundle: true,
+      minify: true,
+      sourcemap: false,
+      platform: "browser",
+      target: "es2018",
+      outfile: OUTPUT,
+      legalComments: "none",
+      logLevel: "info",
+    });
+  } catch (err) {
+    console.error("✗ esbuild failed:", err.message || err);
+    process.exit(1);
+  }
+
+  const size = fs.statSync(OUTPUT).size;
+  console.log(
+    `✓ widget.js published (${(size / 1024).toFixed(1)} KB) in ${Date.now() - t0}ms`
+  );
+  console.log("  Will be served at: /widget.js after next build\n");
 }
 
-step("Building embeddable widget");
-
-// Sanity: widget source exists?
-if (!fs.existsSync(path.join(widgetDir, "package.json"))) {
-  console.error("✗ Widget source not found at " + widgetDir);
-  console.error("  Make sure the repository contains the `widget/` directory.");
+main().catch((err) => {
+  console.error("Unexpected error:", err);
   process.exit(1);
-}
-
-// 1. Install widget deps (idempotent — Vercel caches node_modules)
-step("Installing widget dependencies");
-try {
-  execSync("npm install --no-audit --no-fund --prefer-offline", {
-    cwd: widgetDir, stdio: "inherit",
-  });
-} catch (e) {
-  console.error("✗ Failed to install widget deps");
-  process.exit(1);
-}
-
-// 2. Build (esbuild minified bundle, ~19 KB)
-step("Bundling widget with esbuild");
-try {
-  execSync("npm run build", { cwd: widgetDir, stdio: "inherit" });
-} catch (e) {
-  console.error("✗ Widget build failed");
-  process.exit(1);
-}
-
-// 3. Copy to public/
-step("Publishing widget.js to frontend/public/");
-const src = path.join(widgetDir, "dist", "widget.js");
-const dest = path.join(publicDir, "widget.js");
-
-if (!fs.existsSync(src)) {
-  console.error("✗ Expected build output not found: " + src);
-  process.exit(1);
-}
-
-fs.mkdirSync(publicDir, { recursive: true });
-fs.copyFileSync(src, dest);
-
-const size = fs.statSync(dest).size;
-console.log(`✓ widget.js published (${(size / 1024).toFixed(1)} KB)`);
-console.log("  Available at: /widget.js after Next.js build completes\n");
+});
