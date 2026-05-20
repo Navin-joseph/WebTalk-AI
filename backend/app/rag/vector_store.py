@@ -11,7 +11,7 @@ from qdrant_client.models import (
 )
 from ..database import get_qdrant
 
-VECTOR_DIM = 768  # nomic-embed-text dimension
+VECTOR_DIM = 384  # bge-small-en-v1.5 dimension (fastembed)
 
 
 class VectorStore:
