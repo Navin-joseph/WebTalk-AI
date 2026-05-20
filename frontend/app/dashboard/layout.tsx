@@ -3,13 +3,15 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase";
+import FloatingChat from "@/components/FloatingChat";
 import {
-  LayoutDashboard, MessageSquare, Cpu, BarChart2, Key, LogOut, Sparkles, Bell
+  LayoutDashboard, MessageSquare, Cpu, BarChart2, Key, LogOut, Sparkles, Bell, Bot
 } from "lucide-react";
 
 const nav = [
   { href: "/dashboard", label: "Overview", icon: LayoutDashboard, exact: true },
   { href: "/dashboard/training", label: "Training", icon: Cpu },
+  { href: "/dashboard/playground", label: "Playground", icon: Bot },
   { href: "/dashboard/conversations", label: "Conversations", icon: MessageSquare },
   { href: "/dashboard/analytics", label: "Analytics", icon: BarChart2 },
   { href: "/dashboard/clients", label: "API Keys", icon: Key },
@@ -97,6 +99,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       <main className="flex-1 overflow-auto">
         <div className="px-10 py-8 max-w-7xl mx-auto fade-in">{children}</div>
       </main>
+
+      {/* Floating chat bubble — appears bottom-right on every dashboard page */}
+      <FloatingChat />
     </div>
   );
 }
