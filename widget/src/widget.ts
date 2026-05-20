@@ -14,7 +14,7 @@
  *   </script>
  */
 
-const VERSION = "2.1.0";
+const VERSION = "2.1.1";
 const DEFAULT_API_URL = "https://webtalk-ai.onrender.com";
 const DEFAULT_WS_URL  = "wss://webtalk-ai.onrender.com";
 
