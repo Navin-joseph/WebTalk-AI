@@ -4,7 +4,7 @@ import Link from "next/link";
 import { createClient } from "@/lib/supabase";
 import { api } from "@/lib/api";
 import {
-  MessageSquare, Cpu, Mic, Clock, ArrowUpRight, Rocket, Globe, Key
+  MessageSquare, Cpu, Mic, Clock, ArrowUpRight, Rocket, Globe, Key, Eye
 } from "lucide-react";
 
 interface Analytics {
@@ -34,8 +34,8 @@ function StatCard({
 
 const quickStart = [
   { href: "/dashboard/training", icon: Globe, title: "Crawl your website", desc: "Train the AI on your content" },
-  { href: "/dashboard/clients", icon: Key, title: "Create an API key", desc: "Authenticate your widget embed" },
-  { href: "/dashboard/conversations", icon: MessageSquare, title: "Watch conversations", desc: "See live user sessions" },
+  { href: "/dashboard/preview", icon: Eye, title: "Preview live", desc: "See the AI on your crawled site" },
+  { href: "/dashboard/clients", icon: Key, title: "Install on your site", desc: "Get the embed snippet" },
 ];
 
 export default function DashboardPage() {

@@ -83,7 +83,7 @@ export default function TrainingPage() {
           </div>
           <div>
             <h2 className="font-semibold text-slate-900">Start a new training job</h2>
-            <p className="text-xs text-slate-500">Playwright crawls, extracts text, embeds into Qdrant</p>
+            <p className="text-xs text-slate-500">Fetches pages, extracts text, embeds into Qdrant</p>
           </div>
         </div>
         <form onSubmit={startJob} className="flex flex-wrap gap-3 items-end">

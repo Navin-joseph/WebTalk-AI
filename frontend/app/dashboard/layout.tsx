@@ -3,24 +3,24 @@ import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase";
-import FloatingChat from "@/components/FloatingChat";
 import {
-  LayoutDashboard, MessageSquare, Cpu, BarChart2, Key, LogOut, Sparkles, Bell, Bot
+  LayoutDashboard, MessageSquare, Cpu, BarChart2, Key, LogOut, Sparkles, Eye
 } from "lucide-react";
 
 const nav = [
   { href: "/dashboard", label: "Overview", icon: LayoutDashboard, exact: true },
   { href: "/dashboard/training", label: "Training", icon: Cpu },
-  { href: "/dashboard/playground", label: "Playground", icon: Bot },
+  { href: "/dashboard/preview", label: "Live Preview", icon: Eye },
   { href: "/dashboard/conversations", label: "Conversations", icon: MessageSquare },
   { href: "/dashboard/analytics", label: "Analytics", icon: BarChart2 },
-  { href: "/dashboard/clients", label: "API Keys", icon: Key },
+  { href: "/dashboard/clients", label: "API Keys & Install", icon: Key },
 ];
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const [user, setUser] = useState<{ email?: string } | null>(null);
+  const isPreview = pathname.startsWith("/dashboard/preview");
 
   useEffect(() => {
     const supabase = createClient();
@@ -97,11 +97,10 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
       {/* Main */}
       <main className="flex-1 overflow-auto">
-        <div className="px-10 py-8 max-w-7xl mx-auto fade-in">{children}</div>
+        <div className={`fade-in ${isPreview ? "h-full" : "px-10 py-8 max-w-7xl mx-auto"}`}>
+          {children}
+        </div>
       </main>
-
-      {/* Floating chat bubble — appears bottom-right on every dashboard page */}
-      <FloatingChat />
     </div>
   );
 }

@@ -53,10 +53,12 @@ export default function ApiKeysPage() {
   const snippet = `<script>
   window.WebTalkConfig = {
     clientId: "${clientId}",
-    apiKey: "YOUR_API_KEY"
+    apiKey: "YOUR_API_KEY",
+    apiUrl: "https://webtalk-ai.onrender.com",
+    wsUrl: "wss://webtalk-ai.onrender.com"
   };
 </script>
-<script src="https://cdn.webtalk.ai/widget.js" async></script>`;
+<script src="https://web-talk-ai.vercel.app/widget.js" async></script>`;
 
   return (
     <div className="space-y-8">

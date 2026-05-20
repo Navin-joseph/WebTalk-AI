@@ -61,8 +61,44 @@ async def chat(
         session_id=payload.session_id,
     )
 
-    # Persist conversation
     _upsert_conversation(db, str(client["id"]), payload.session_id, payload.message, result["answer"])
+
+    return ChatResponse(
+        answer=result["answer"],
+        sources=result["sources"],
+        session_id=payload.session_id,
+    )
+
+
+@router.post("/playground", response_model=ChatResponse)
+async def playground_chat(
+    payload: ChatRequest,
+    user: TokenPayload = Depends(get_current_user),
+    db: Client = Depends(get_supabase),
+):
+    """
+    Dashboard playground — chat with your own agent without needing an API key.
+    Authenticated with the user's JWT and automatically scoped to their client_id.
+    """
+    from ..rag.pipeline import RAGPipeline
+
+    # Resolve current user's client_id
+    client_row = (
+        db.table("clients").select("id").eq("owner_user_id", user.sub).single().execute()
+    )
+    if not client_row.data:
+        raise HTTPException(status_code=404, detail="Client not found")
+
+    client_id = str(client_row.data["id"])
+
+    rag = RAGPipeline()
+    result = await rag.query(
+        client_id=client_id,
+        question=payload.message,
+        session_id=payload.session_id,
+    )
+
+    _upsert_conversation(db, client_id, payload.session_id, payload.message, result["answer"])
 
     return ChatResponse(
         answer=result["answer"],
