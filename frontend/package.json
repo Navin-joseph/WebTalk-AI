@@ -4,7 +4,9 @@
   "private": true,
   "scripts": {
     "dev": "next dev",
+    "prebuild": "node scripts/build-widget.js",
     "build": "next build",
+    "build:widget": "node scripts/build-widget.js",
     "start": "next start",
     "lint": "next lint"
   },
