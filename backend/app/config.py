@@ -25,10 +25,11 @@ class Settings(BaseSettings):
     qdrant_url: str = "http://localhost:6333"
     qdrant_api_key: str = ""
 
-    # Groq
+    # Groq — see https://console.groq.com/docs/models for current model names.
+    # llama3-70b-8192 was retired; use llama-3.3-70b-versatile (or 70b-8k variant).
     groq_api_key: str
-    groq_model: str = "llama3-70b-8192"
-    groq_embedding_model: str = "nomic-embed-text-v1_5"
+    groq_model: str = "llama-3.3-70b-versatile"
+    groq_embedding_model: str = "nomic-embed-text-v1_5"  # unused (we use fastembed)
 
     # Deepgram
     deepgram_api_key: str

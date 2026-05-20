@@ -22,10 +22,31 @@ class VectorStore:
         return f"client_{client_id.replace('-', '_')}"
 
     async def ensure_collection(self, client_id: str):
+        """Create the collection if missing. If it exists with the wrong
+        vector dimension (e.g. from a previous embedding model), recreate it."""
+        import logging
+        log = logging.getLogger("webtalk.vector_store")
+
         name = self._collection_name(client_id)
         existing = await self.client.get_collections()
         names = [c.name for c in existing.collections]
+
+        if name in names:
+            try:
+                info = await self.client.get_collection(name)
+                cur_dim = info.config.params.vectors.size
+                if cur_dim != VECTOR_DIM:
+                    log.warning(
+                        "Collection %s has dim=%d but VECTOR_DIM=%d — recreating",
+                        name, cur_dim, VECTOR_DIM,
+                    )
+                    await self.client.delete_collection(name)
+                    names.remove(name)
+            except Exception as e:
+                log.warning("Could not inspect collection %s: %s", name, e)
+
         if name not in names:
+            log.info("Creating Qdrant collection %s (dim=%d)", name, VECTOR_DIM)
             await self.client.create_collection(
                 collection_name=name,
                 vectors_config=VectorParams(size=VECTOR_DIM, distance=Distance.COSINE),

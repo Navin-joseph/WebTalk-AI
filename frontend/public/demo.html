@@ -1,0 +1,226 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>Acme Books · Live Demo — WebTalk AI</title>
+  <meta name="description" content="Live demo of the WebTalk AI widget embedded on a real website." />
+  <style>
+    :root { color-scheme: light; }
+    * { box-sizing: border-box; }
+    html, body { margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: #fafafa;
+      color: #0f172a;
+      line-height: 1.6;
+    }
+    .hero {
+      background: linear-gradient(135deg, #6366f1 0%, #a855f7 50%, #ec4899 100%);
+      color: white;
+      padding: 80px 20px 100px;
+      text-align: center;
+      position: relative;
+      overflow: hidden;
+    }
+    .hero::before {
+      content: ""; position: absolute; inset: 0;
+      background-image:
+        linear-gradient(rgba(255,255,255,.06) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,.06) 1px, transparent 1px);
+      background-size: 40px 40px;
+    }
+    .hero > * { position: relative; z-index: 1; }
+    .badge {
+      display: inline-block; padding: 6px 14px; background: rgba(255,255,255,.18);
+      backdrop-filter: blur(8px); border-radius: 99px; font-size: 13px; margin-bottom: 16px;
+      font-weight: 600; letter-spacing: 0.02em;
+    }
+    h1 { font-size: 48px; margin: 0 0 16px; font-weight: 800; letter-spacing: -0.02em; }
+    .subtitle { font-size: 18px; opacity: 0.92; max-width: 600px; margin: 0 auto 28px; }
+    .cta { display: inline-flex; gap: 12px; align-items: center; }
+    .btn {
+      display: inline-block; padding: 12px 24px; border-radius: 12px; font-weight: 600;
+      text-decoration: none; transition: transform .15s, opacity .15s; font-size: 15px;
+    }
+    .btn:hover { transform: translateY(-1px); }
+    .btn-primary { background: white; color: #4f46e5; }
+    .btn-ghost { background: rgba(255,255,255,.15); color: white; border: 1px solid rgba(255,255,255,.3); }
+
+    main { max-width: 960px; margin: -60px auto 80px; padding: 0 20px; position: relative; z-index: 2; }
+    .card {
+      background: white; border-radius: 24px; padding: 40px; box-shadow: 0 20px 60px rgba(15,23,42,0.10);
+      margin-bottom: 24px;
+    }
+    .card h2 { margin: 0 0 14px; font-size: 26px; letter-spacing: -0.01em; }
+    .card p { margin: 0 0 14px; color: #475569; }
+
+    .grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 20px; }
+    @media (max-width: 640px) { .grid { grid-template-columns: 1fr; } }
+    .tile {
+      background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 16px; padding: 22px;
+    }
+    .tile h3 { margin: 0 0 8px; font-size: 17px; }
+    .tile p { margin: 0; font-size: 14px; color: #64748b; }
+    .tile .icon { width: 38px; height: 38px; border-radius: 10px; display: flex; align-items: center; justify-content: center; margin-bottom: 12px; font-size: 18px; color: white; }
+
+    .config-card { background: #0f172a; color: #f1f5f9; }
+    .config-card h2 { color: white; }
+    .config-card p { color: #94a3b8; }
+    .config-card label { font-size: 12px; font-weight: 600; text-transform: uppercase; letter-spacing: .08em; color: #94a3b8; display: block; margin-top: 14px; margin-bottom: 6px; }
+    .config-card input, .config-card select {
+      width: 100%; padding: 10px 14px; background: #1e293b; color: #f1f5f9; border: 1px solid #334155;
+      border-radius: 10px; font-family: inherit; font-size: 14px;
+    }
+    .config-card input:focus, .config-card select:focus { outline: 2px solid #6366f1; outline-offset: 1px; }
+    .btn-reload { background: linear-gradient(135deg, #6366f1, #a855f7); color: white; border: none; padding: 12px 22px; border-radius: 10px; font-weight: 600; cursor: pointer; margin-top: 18px; font-size: 14px; }
+    .url-hint { font-family: ui-monospace, "SF Mono", Menlo, monospace; font-size: 12px; color: #64748b; background: #1e293b; padding: 10px 12px; border-radius: 8px; margin-top: 12px; word-break: break-all; }
+
+    .alert { background: #fef3c7; border: 1px solid #fcd34d; color: #92400e; padding: 14px 18px; border-radius: 12px; margin-bottom: 18px; font-size: 14px; }
+
+    footer { text-align: center; padding: 30px 20px; color: #94a3b8; font-size: 13px; }
+    footer a { color: #6366f1; text-decoration: none; }
+  </style>
+</head>
+<body>
+  <section class="hero">
+    <div class="badge">🤖 LIVE DEMO</div>
+    <h1>Acme Books</h1>
+    <p class="subtitle">A fictional bookstore — but the AI assistant in the bottom-right is real.<br>
+    Ask it anything about our (imaginary) products.</p>
+    <div class="cta">
+      <a class="btn btn-primary" href="#config">Try with your own API key</a>
+      <a class="btn btn-ghost" href="https://web-talk-ai.vercel.app/dashboard">Dashboard</a>
+    </div>
+  </section>
+
+  <main>
+    <div class="card">
+      <h2>About this page</h2>
+      <p>This is a regular HTML page hosted on Vercel — no Next.js, no React, no framework.
+      The floating AI bubble in the corner came from a single <code>&lt;script&gt;</code> tag
+      added before the closing <code>&lt;/body&gt;</code>. That's the entire integration.</p>
+
+      <div class="grid">
+        <div class="tile">
+          <div class="icon" style="background:#3b82f6">💬</div>
+          <h3>Type a message</h3>
+          <p>The AI streams a reply from your trained content.</p>
+        </div>
+        <div class="tile">
+          <div class="icon" style="background:#a855f7">🎤</div>
+          <h3>Click the mic</h3>
+          <p>Voice conversation via Deepgram + ElevenLabs.</p>
+        </div>
+        <div class="tile">
+          <div class="icon" style="background:#10b981">🔊</div>
+          <h3>Auto-spoken replies</h3>
+          <p>Typed answers are also read out loud.</p>
+        </div>
+      </div>
+    </div>
+
+    <div id="config" class="card config-card">
+      <h2>Connect your own AI</h2>
+      <p>Paste your API key from the WebTalk AI dashboard. The widget will reload with your trained agent.</p>
+
+      <div id="noKeyAlert" class="alert" style="display:none">
+        No <code>?key=...</code> in the URL — the widget below uses a placeholder.
+        Add your key with one of the buttons below to test your trained content.
+      </div>
+
+      <label>API key (from your dashboard)</label>
+      <input id="keyInput" type="text" placeholder="wtk_..." autocomplete="off" />
+
+      <label>Theme</label>
+      <select id="themeSelect">
+        <option value="purple">Purple (default)</option>
+        <option value="blue">Blue</option>
+        <option value="green">Green</option>
+        <option value="dark">Dark</option>
+      </select>
+
+      <label>Position</label>
+      <select id="positionSelect">
+        <option value="bottom-right">Bottom right</option>
+        <option value="bottom-left">Bottom left</option>
+      </select>
+
+      <button class="btn-reload" onclick="reloadWithConfig()">Load AI with my settings</button>
+
+      <div class="url-hint" id="urlHint">Configured URL will appear here…</div>
+    </div>
+
+    <div class="card">
+      <h2>How to embed on a real site</h2>
+      <p>This same widget works on any website. Paste this just before <code>&lt;/body&gt;</code>:</p>
+      <pre style="background:#0f172a;color:#f1f5f9;padding:18px;border-radius:12px;overflow-x:auto;font-size:13px;font-family:ui-monospace,Menlo,monospace;line-height:1.6;">&lt;script src="https://web-talk-ai.vercel.app/widget.js?v=2.1.4"&gt;&lt;/script&gt;
+&lt;script&gt;
+  WebTalkAI.init({
+    apiKey: "wtk_YOUR_KEY",
+    position: "bottom-right",
+    theme: "purple",
+    voiceEnabled: true,
+    ttsAutoPlay: true
+  });
+&lt;/script&gt;</pre>
+    </div>
+  </main>
+
+  <footer>
+    Powered by <a href="https://web-talk-ai.vercel.app">WebTalk AI</a> · This demo lives at
+    <a href="https://web-talk-ai.vercel.app/demo.html">/demo.html</a> on Vercel.
+  </footer>
+
+  <!-- ─── THE WIDGET ──────────────────────────────────────────────────── -->
+  <script src="https://web-talk-ai.vercel.app/widget.js?v=2.1.4"></script>
+  <script>
+    // Read config from URL params so you can share demo URLs with customers:
+    //   /demo.html?key=wtk_xxx&theme=blue&position=bottom-left
+    const params = new URLSearchParams(window.location.search);
+    const apiKey = params.get("key") || "wtk_PASTE_YOUR_KEY_BELOW";
+    const theme = params.get("theme") || "purple";
+    const position = params.get("position") || "bottom-right";
+
+    if (!params.get("key")) {
+      document.getElementById("noKeyAlert").style.display = "block";
+    }
+
+    // Show form values
+    document.getElementById("keyInput").value = params.get("key") || "";
+    document.getElementById("themeSelect").value = theme;
+    document.getElementById("positionSelect").value = position;
+
+    // Initialize widget if we have a real key
+    if (apiKey.startsWith("wtk_") && !apiKey.includes("PASTE")) {
+      WebTalkAI.init({ apiKey, theme, position, voiceEnabled: true, ttsAutoPlay: true });
+    }
+
+    function reloadWithConfig() {
+      const k = document.getElementById("keyInput").value.trim();
+      if (!k) { alert("Please paste an API key (wtk_...) first."); return; }
+      const t = document.getElementById("themeSelect").value;
+      const p = document.getElementById("positionSelect").value;
+      const url = new URL(window.location.href);
+      url.searchParams.set("key", k);
+      url.searchParams.set("theme", t);
+      url.searchParams.set("position", p);
+      window.location.href = url.toString();
+    }
+
+    // Live update URL hint
+    function updateHint() {
+      const k = document.getElementById("keyInput").value.trim() || "wtk_YOUR_KEY";
+      const t = document.getElementById("themeSelect").value;
+      const p = document.getElementById("positionSelect").value;
+      document.getElementById("urlHint").textContent =
+        `${window.location.origin}/demo.html?key=${k}&theme=${t}&position=${p}`;
+    }
+    ["keyInput","themeSelect","positionSelect"].forEach(id => {
+      document.getElementById(id).addEventListener("input", updateHint);
+      document.getElementById(id).addEventListener("change", updateHint);
+    });
+    updateHint();
+  </script>
+</body>
+</html>

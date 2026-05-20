@@ -50,12 +50,14 @@ export default function ApiKeysPage() {
     setKeys((prev) => prev.filter((k) => k.id !== id));
   }
 
-  const snippet = `<script src="https://web-talk-ai.vercel.app/widget.js?v=2.1.3"></script>
+  const snippet = `<script src="https://web-talk-ai.vercel.app/widget.js?v=2.1.4"></script>
 <script>
   WebTalkAI.init({
     apiKey: "YOUR_API_KEY",
-    position: "bottom-right",
-    theme: "purple"
+    position: "bottom-right",   // or "bottom-left"
+    theme: "purple",            // "purple" | "blue" | "green" | "dark"
+    voiceEnabled: true,         // show mic button for voice chat
+    ttsAutoPlay: true           // speak the AI's reply out loud
   });
 </script>`;
 

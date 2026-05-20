@@ -14,7 +14,7 @@
  *   </script>
  */
 
-const VERSION = "2.1.3";
+const VERSION = "2.1.4";
 const DEFAULT_API_URL = "https://webtalk-ai.onrender.com";
 const DEFAULT_WS_URL  = "wss://webtalk-ai.onrender.com";
 
@@ -548,13 +548,18 @@ function speakWithBrowser(text: string) {
   // Cancel anything that's currently speaking
   window.speechSynthesis.cancel();
 
+  // Guard against multiple triggers — Chrome's onvoiceschanged + setTimeout
+  // would otherwise both fire and queue the same utterance twice.
+  let spoken = false;
   const speak = () => {
+    if (spoken) return;
+    spoken = true;
+
     const utter = new SpeechSynthesisUtterance(text);
     utter.rate = 1.0;
     utter.pitch = 1.0;
     utter.volume = 1.0;
 
-    // Pick a pleasant English voice if available
     const voices = window.speechSynthesis.getVoices();
     const preferred =
       voices.find((v) => /Google US English|Samantha|Karen|Daniel|Microsoft.*Natural/i.test(v.name)) ||
@@ -565,13 +570,12 @@ function speakWithBrowser(text: string) {
     window.speechSynthesis.speak(utter);
   };
 
-  // On some browsers, voices load asynchronously — wait briefly if empty
   if (window.speechSynthesis.getVoices().length === 0) {
     window.speechSynthesis.onvoiceschanged = () => {
       window.speechSynthesis.onvoiceschanged = null;
       speak();
     };
-    setTimeout(speak, 250); // fallback in case onvoiceschanged never fires
+    setTimeout(speak, 250); // fallback if onvoiceschanged never fires
   } else {
     speak();
   }
