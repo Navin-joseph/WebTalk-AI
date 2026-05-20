@@ -50,21 +50,20 @@ export default function ApiKeysPage() {
     setKeys((prev) => prev.filter((k) => k.id !== id));
   }
 
-  const snippet = `<script>
-  window.WebTalkConfig = {
-    clientId: "${clientId}",
+  const snippet = `<script src="https://web-talk-ai.vercel.app/widget.js"></script>
+<script>
+  WebTalkAI.init({
     apiKey: "YOUR_API_KEY",
-    apiUrl: "https://webtalk-ai.onrender.com",
-    wsUrl: "wss://webtalk-ai.onrender.com"
-  };
-</script>
-<script src="https://web-talk-ai.vercel.app/widget.js" async></script>`;
+    position: "bottom-right",
+    theme: "purple"
+  });
+</script>`;
 
   return (
     <div className="space-y-8">
       <div>
-        <h1 className="text-3xl font-bold text-slate-900 tracking-tight">API Keys</h1>
-        <p className="text-slate-500 mt-1">Manage authentication keys for your embeddable widget</p>
+        <h1 className="text-3xl font-bold text-slate-900 tracking-tight">Install & API Keys</h1>
+        <p className="text-slate-500 mt-1">Embed the AI on any website you own — voice + text out of the box</p>
       </div>
 
       {createdKey && (

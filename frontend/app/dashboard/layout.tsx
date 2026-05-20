@@ -4,23 +4,21 @@ import { usePathname, useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase";
 import {
-  LayoutDashboard, MessageSquare, Cpu, BarChart2, Key, LogOut, Sparkles, Eye
+  LayoutDashboard, MessageSquare, Cpu, BarChart2, Key, LogOut, Sparkles
 } from "lucide-react";
 
 const nav = [
   { href: "/dashboard", label: "Overview", icon: LayoutDashboard, exact: true },
   { href: "/dashboard/training", label: "Training", icon: Cpu },
-  { href: "/dashboard/preview", label: "Live Preview", icon: Eye },
   { href: "/dashboard/conversations", label: "Conversations", icon: MessageSquare },
   { href: "/dashboard/analytics", label: "Analytics", icon: BarChart2 },
-  { href: "/dashboard/clients", label: "API Keys & Install", icon: Key },
+  { href: "/dashboard/clients", label: "Install & API Keys", icon: Key },
 ];
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
   const [user, setUser] = useState<{ email?: string } | null>(null);
-  const isPreview = pathname.startsWith("/dashboard/preview");
 
   useEffect(() => {
     const supabase = createClient();
@@ -40,7 +38,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
 
   return (
     <div className="flex h-screen bg-mesh">
-      {/* Sidebar */}
       <aside className="w-64 bg-white border-r border-slate-200/70 flex flex-col flex-shrink-0">
         <div className="px-6 py-5 border-b border-slate-100">
           <Link href="/dashboard" className="flex items-center gap-2.5">
@@ -73,7 +70,6 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           })}
         </nav>
 
-        {/* User card */}
         <div className="p-3 border-t border-slate-100">
           <div className="flex items-center gap-3 px-2 py-2 rounded-xl hover:bg-slate-50 transition cursor-pointer">
             <div className="w-9 h-9 rounded-full bg-gradient-brand text-white font-semibold flex items-center justify-center text-sm flex-shrink-0">
@@ -95,11 +91,8 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         </div>
       </aside>
 
-      {/* Main */}
       <main className="flex-1 overflow-auto">
-        <div className={`fade-in ${isPreview ? "h-full" : "px-10 py-8 max-w-7xl mx-auto"}`}>
-          {children}
-        </div>
+        <div className="fade-in px-10 py-8 max-w-7xl mx-auto">{children}</div>
       </main>
     </div>
   );

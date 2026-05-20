@@ -8,6 +8,7 @@ from .api.clients import router as clients_router
 from .api.training import router as training_router
 from .api.conversations import router as conversations_router
 from .api.analytics import router as analytics_router
+from .api.widget import router as widget_router
 from .websocket.handler import voice_websocket_handler
 
 settings = get_settings()
@@ -46,6 +47,7 @@ app.include_router(clients_router, prefix="/api/v1")
 app.include_router(training_router, prefix="/api/v1")
 app.include_router(conversations_router, prefix="/api/v1")
 app.include_router(analytics_router, prefix="/api/v1")
+app.include_router(widget_router, prefix="/api/v1")
 
 
 @app.get("/health")
