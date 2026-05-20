@@ -14,7 +14,7 @@
  *   </script>
  */
 
-const VERSION = "2.1.1";
+const VERSION = "2.1.2";
 const DEFAULT_API_URL = "https://webtalk-ai.onrender.com";
 const DEFAULT_WS_URL  = "wss://webtalk-ai.onrender.com";
 
@@ -508,11 +508,17 @@ async function playTTS(text: string) {
       body: JSON.stringify({ text }),
     });
     if (!res.ok) {
-      console.warn("[WebTalkAI] TTS HTTP", res.status);
+      let detail = "";
+      try { detail = JSON.stringify(await res.json()); } catch { detail = await res.text().catch(() => ""); }
+      console.warn("[WebTalkAI] TTS failed:", res.status, detail);
       return;
     }
     const buffer = await res.arrayBuffer();
     console.log("[WebTalkAI] TTS audio:", buffer.byteLength, "bytes");
+    if (buffer.byteLength === 0) {
+      console.warn("[WebTalkAI] TTS returned 0 bytes — check Render logs");
+      return;
+    }
     await playAudioBuffer(buffer);
   } catch (e) {
     console.warn("[WebTalkAI] TTS playback failed:", e);

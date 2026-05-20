@@ -225,28 +225,45 @@ async def widget_tts(
     payload: TTSRequest = Body(...),
     client: dict = Depends(get_client_from_api_key),
 ):
-    """Stream MP3 audio of the given text."""
-    from ..voice.tts import ElevenLabsTTS
+    """
+    Return MP3 audio bytes (one-shot — no streaming).
+
+    Streaming is fragile across Render's proxy. One-shot returns the whole
+    audio file in a single response, which the client decodes via Web Audio.
+    Surfaces real errors (auth, quota, bad voice) as 502 with details.
+    """
+    from ..voice.tts import ElevenLabsTTS, TTSError
+    from fastapi.responses import Response
 
     text = payload.text.strip()
     if not text:
         raise HTTPException(status_code=400, detail="Text required")
     text = text[:1200]
 
-    logger.info("tts IN client=%s len=%d", client.get("id"), len(text))
-    tts = ElevenLabsTTS()
+    client_id = client.get("id", "?")
+    logger.info("tts IN client=%s len=%d", client_id, len(text))
 
-    async def audio_stream():
-        try:
-            async for chunk in tts.synthesize_stream(text):
-                yield chunk
-        except Exception:
-            logger.exception("tts stream failed")
+    try:
+        tts = ElevenLabsTTS()
+        audio = await tts.synthesize(text)
+    except TTSError as e:
+        logger.error("tts ElevenLabs error: %s", e)
+        raise HTTPException(
+            status_code=502,
+            detail=f"ElevenLabs returned {e.status}: {e.body[:200]}",
+        )
+    except Exception as e:
+        logger.exception("tts unexpected failure")
+        raise HTTPException(status_code=500, detail=f"TTS failed: {type(e).__name__}")
 
-    return StreamingResponse(
-        audio_stream(),
+    logger.info("tts OUT client=%s bytes=%d", client_id, len(audio))
+    return Response(
+        content=audio,
         media_type="audio/mpeg",
-        headers={"Cache-Control": "no-store"},
+        headers={
+            "Cache-Control": "no-store",
+            "Content-Length": str(len(audio)),
+        },
     )
 
 

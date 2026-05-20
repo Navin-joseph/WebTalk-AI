@@ -1,9 +1,20 @@
+import logging
 import httpx
 from ..config import get_settings
 
+logger = logging.getLogger("webtalk.tts")
 settings = get_settings()
 
 ELEVENLABS_URL = "https://api.elevenlabs.io/v1/text-to-speech"
+
+
+class TTSError(Exception):
+    """Raised when ElevenLabs synthesis fails. Includes status + body so we
+    can surface the actual issue (auth, quota, bad voice id, etc)."""
+    def __init__(self, status: int, body: str):
+        super().__init__(f"ElevenLabs error {status}: {body[:200]}")
+        self.status = status
+        self.body = body
 
 
 class ElevenLabsTTS:
@@ -19,7 +30,7 @@ class ElevenLabsTTS:
         }
 
     async def synthesize(self, text: str) -> bytes:
-        """Synthesize text and return MP3 audio bytes."""
+        """One-shot synthesis. Returns MP3 bytes. Raises TTSError on failure."""
         url = f"{ELEVENLABS_URL}/{self.voice_id}"
         payload = {
             "text": text,
@@ -31,14 +42,16 @@ class ElevenLabsTTS:
                 "use_speaker_boost": True,
             },
         }
-
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(url, headers=self.headers, json=payload)
-            resp.raise_for_status()
+            if resp.status_code != 200:
+                body = resp.text
+                logger.error("ElevenLabs synth failed %s: %s", resp.status_code, body[:300])
+                raise TTSError(resp.status_code, body)
             return resp.content
 
     async def synthesize_stream(self, text: str):
-        """Yield audio chunks as they stream from ElevenLabs."""
+        """Yield MP3 chunks. Raises TTSError on failure (BEFORE yielding any chunks)."""
         url = f"{ELEVENLABS_URL}/{self.voice_id}/stream"
         payload = {
             "text": text,
@@ -48,7 +61,18 @@ class ElevenLabsTTS:
 
         async with httpx.AsyncClient(timeout=60) as client:
             async with client.stream("POST", url, headers=self.headers, json=payload) as resp:
-                resp.raise_for_status()
+                if resp.status_code != 200:
+                    body_bytes = await resp.aread()
+                    body = body_bytes.decode("utf-8", errors="replace")
+                    logger.error(
+                        "ElevenLabs stream failed %s voice=%s: %s",
+                        resp.status_code, self.voice_id, body[:400],
+                    )
+                    raise TTSError(resp.status_code, body)
+
+                total = 0
                 async for chunk in resp.aiter_bytes(chunk_size=4096):
                     if chunk:
+                        total += len(chunk)
                         yield chunk
+                logger.info("ElevenLabs stream done: %d bytes", total)
