@@ -1,4 +1,6 @@
+import json
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from supabase import Client
 from ..database import get_supabase
 from ..auth.dependencies import get_current_user, get_client_from_api_key
@@ -104,6 +106,63 @@ async def playground_chat(
         answer=result["answer"],
         sources=result["sources"],
         session_id=payload.session_id,
+    )
+
+
+@router.post("/playground/stream")
+async def playground_stream(
+    payload: ChatRequest,
+    user: TokenPayload = Depends(get_current_user),
+    db: Client = Depends(get_supabase),
+):
+    """
+    Streaming version of /playground. Returns Server-Sent Events.
+
+    Event types:
+      data: {"type": "sources", "sources": [...]}
+      data: {"type": "token",   "text": "..."}
+      data: {"type": "done",    "answer": "full text"}
+    """
+    from ..rag.pipeline import RAGPipeline
+
+    client_row = (
+        db.table("clients").select("id").eq("owner_user_id", user.sub).single().execute()
+    )
+    if not client_row.data:
+        raise HTTPException(status_code=404, detail="Client not found")
+
+    client_id = str(client_row.data["id"])
+    rag = RAGPipeline()
+
+    async def event_generator():
+        full_answer = ""
+        try:
+            async for event in rag.stream_query(
+                client_id=client_id,
+                question=payload.message,
+                session_id=payload.session_id,
+            ):
+                if event["type"] == "done":
+                    full_answer = event["answer"]
+                yield f"data: {json.dumps(event)}\n\n"
+
+            # Persist the conversation once we have the full answer
+            if full_answer:
+                _upsert_conversation(
+                    db, client_id, payload.session_id, payload.message, full_answer
+                )
+            yield "data: [DONE]\n\n"
+        except Exception as e:
+            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+
+    return StreamingResponse(
+        event_generator(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",  # disable proxy buffering (nginx)
+        },
     )
 
 

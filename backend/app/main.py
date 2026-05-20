@@ -27,10 +27,15 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+# CORS — open because:
+#  - The dashboard runs on changing Vercel URLs (previews + prod)
+#  - The widget needs to be embeddable on ANY customer site
+# Real security is enforced by JWT (dashboard) and API keys (widget).
+# This is the same model used by Intercom, Drift, Crisp, etc.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=settings.allowed_origins,
-    allow_credentials=True,
+    allow_origin_regex=r".*",
+    allow_credentials=False,  # must be False when origin is wildcarded
     allow_methods=["*"],
     allow_headers=["*"],
 )
