@@ -14,7 +14,7 @@
  *   </script>
  */
 
-const VERSION = "2.1.2";
+const VERSION = "2.1.3";
 const DEFAULT_API_URL = "https://webtalk-ai.onrender.com";
 const DEFAULT_WS_URL  = "wss://webtalk-ai.onrender.com";
 
@@ -497,31 +497,83 @@ async function playAudioBuffer(buffer: ArrayBuffer): Promise<void> {
   });
 }
 
+// Track once-per-session whether server TTS works so we stop retrying it
+// after the first failure (saves ~3 sec per message).
+let serverTTSAvailable: boolean | null = null;
+
 async function playTTS(text: string) {
-  try {
-    const res = await fetch(`${cfg.apiUrl}/api/v1/widget/tts`, {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-API-Key": cfg.apiKey,
-      },
-      body: JSON.stringify({ text }),
-    });
-    if (!res.ok) {
+  // 1. Try server-side ElevenLabs (best quality) — but skip if we already
+  //    know it's unavailable for this session.
+  if (serverTTSAvailable !== false) {
+    try {
+      const res = await fetch(`${cfg.apiUrl}/api/v1/widget/tts`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "X-API-Key": cfg.apiKey,
+        },
+        body: JSON.stringify({ text }),
+      });
+      if (res.ok) {
+        const buffer = await res.arrayBuffer();
+        if (buffer.byteLength > 0) {
+          console.log("[WebTalkAI] TTS (ElevenLabs):", buffer.byteLength, "bytes");
+          serverTTSAvailable = true;
+          await playAudioBuffer(buffer);
+          return;
+        }
+      }
+      // Server TTS failed — log once, then fall through to browser TTS
       let detail = "";
-      try { detail = JSON.stringify(await res.json()); } catch { detail = await res.text().catch(() => ""); }
-      console.warn("[WebTalkAI] TTS failed:", res.status, detail);
-      return;
+      try { detail = JSON.stringify(await res.json()); } catch { detail = (await res.text().catch(() => "")) || ""; }
+      console.warn("[WebTalkAI] Server TTS unavailable (HTTP " + res.status + "); using browser voice for the rest of this session.");
+      if (detail) console.warn("[WebTalkAI] Server detail:", detail.slice(0, 200));
+      serverTTSAvailable = false;
+    } catch (e) {
+      console.warn("[WebTalkAI] Server TTS error, switching to browser voice:", e);
+      serverTTSAvailable = false;
     }
-    const buffer = await res.arrayBuffer();
-    console.log("[WebTalkAI] TTS audio:", buffer.byteLength, "bytes");
-    if (buffer.byteLength === 0) {
-      console.warn("[WebTalkAI] TTS returned 0 bytes — check Render logs");
-      return;
-    }
-    await playAudioBuffer(buffer);
-  } catch (e) {
-    console.warn("[WebTalkAI] TTS playback failed:", e);
+  }
+
+  // 2. Fallback: browser speechSynthesis (free, on-device, always available)
+  speakWithBrowser(text);
+}
+
+function speakWithBrowser(text: string) {
+  if (typeof window === "undefined" || !("speechSynthesis" in window)) {
+    console.warn("[WebTalkAI] Browser TTS not supported in this browser");
+    return;
+  }
+
+  // Cancel anything that's currently speaking
+  window.speechSynthesis.cancel();
+
+  const speak = () => {
+    const utter = new SpeechSynthesisUtterance(text);
+    utter.rate = 1.0;
+    utter.pitch = 1.0;
+    utter.volume = 1.0;
+
+    // Pick a pleasant English voice if available
+    const voices = window.speechSynthesis.getVoices();
+    const preferred =
+      voices.find((v) => /Google US English|Samantha|Karen|Daniel|Microsoft.*Natural/i.test(v.name)) ||
+      voices.find((v) => v.lang && v.lang.toLowerCase().startsWith("en"));
+    if (preferred) utter.voice = preferred;
+
+    console.log("[WebTalkAI] TTS (browser):", utter.voice?.name || "default");
+    window.speechSynthesis.speak(utter);
+  };
+
+  // On some browsers, voices load asynchronously — wait briefly if empty
+  if (window.speechSynthesis.getVoices().length === 0) {
+    window.speechSynthesis.onvoiceschanged = () => {
+      window.speechSynthesis.onvoiceschanged = null;
+      speak();
+    };
+    setTimeout(speak, 250); // fallback in case onvoiceschanged never fires
+  } else {
+    speak();
   }
 }
 
