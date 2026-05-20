@@ -1,9 +1,12 @@
+import time
+import logging
 from typing import AsyncGenerator
 from groq import AsyncGroq
 from ..config import get_settings
 from ..crawler.embeddings import EmbeddingService
 from .vector_store import VectorStore
 
+logger = logging.getLogger("webtalk.rag")
 settings = get_settings()
 
 SYSTEM_PROMPT = """You are a friendly, knowledgeable AI assistant for {company_name}.
@@ -43,8 +46,22 @@ class RAGPipeline:
         self.vector_store = VectorStore()
 
     async def _retrieve(self, client_id: str, question: str, top_k: int = 6) -> list[dict]:
+        t0 = time.monotonic()
         query_vector = await self.embedder.embed_query(question)
-        return await self.vector_store.search(client_id, query_vector, top_k=top_k)
+        t_embed = (time.monotonic() - t0) * 1000
+
+        try:
+            chunks = await self.vector_store.search(client_id, query_vector, top_k=top_k)
+        except Exception as e:
+            # Collection might not exist yet (no crawl done) — log + return empty
+            logger.warning("Qdrant search failed for client=%s: %s", client_id, e)
+            chunks = []
+        t_search = (time.monotonic() - t0) * 1000 - t_embed
+        logger.info(
+            "Qdrant chunks found: %d for client=%s (embed=%.0fms search=%.0fms)",
+            len(chunks), client_id, t_embed, t_search,
+        )
+        return chunks
 
     def _build_messages(
         self,
@@ -82,13 +99,24 @@ class RAGPipeline:
         chunks = await self._retrieve(client_id, question)
         messages = self._build_messages(question, chunks, conversation_history, company_name)
 
-        response = await self.groq.chat.completions.create(
-            model=settings.groq_model,
-            messages=messages,
-            max_tokens=600,
-            temperature=0.3,
-        )
+        t0 = time.monotonic()
+        try:
+            response = await self.groq.chat.completions.create(
+                model=settings.groq_model,
+                messages=messages,
+                max_tokens=600,
+                temperature=0.3,
+            )
+        except Exception as e:
+            logger.exception("Groq call failed: %s", e)
+            raise
+
         answer = response.choices[0].message.content or ""
+        dt = (time.monotonic() - t0) * 1000
+        logger.info(
+            "Groq response generated: model=%s tokens~%d dt=%.0fms",
+            settings.groq_model, len(answer.split()), dt,
+        )
         sources = list(dict.fromkeys(c["url"] for c in chunks))  # preserve order
         return {"answer": answer, "sources": sources}
 

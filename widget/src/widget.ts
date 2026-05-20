@@ -14,9 +14,17 @@
  *   </script>
  */
 
-const VERSION = "2.0.0";
+const VERSION = "2.1.0";
 const DEFAULT_API_URL = "https://webtalk-ai.onrender.com";
 const DEFAULT_WS_URL  = "wss://webtalk-ai.onrender.com";
+
+// Loud, unmissable startup banner. If you don't see this in DevTools console,
+// your browser is serving a CACHED old widget.js — hard-refresh (Ctrl+Shift+R).
+console.log(
+  "%c[WebTalkAI v" + VERSION + "] %cText = REST · Voice = WebSocket (mic only)",
+  "background:#6366f1;color:#fff;padding:2px 6px;border-radius:3px;font-weight:bold",
+  "color:#6b7280"
+);
 
 // ────────────────────────── Types ──────────────────────────
 
@@ -328,7 +336,13 @@ function renderSuggestions() {
   });
 }
 
-// ────────────────────────── Text chat (SSE streaming) ──────────────────────────
+// ────────────────────────── Text chat ──────────────────────────
+//
+// Uses non-streaming JSON endpoint (/widget/chat) — reliable across all
+// proxies. SSE streaming exists on the backend (/widget/chat/stream) but
+// Render's proxy buffers it, so we use the simpler endpoint by default.
+
+const CHAT_TIMEOUT_MS = 60_000;
 
 async function sendText(textOverride?: string) {
   const text = (textOverride ?? inputEl.value).trim();
@@ -343,82 +357,79 @@ async function sendText(textOverride?: string) {
   renderMessages();
   renderSuggestions();
 
-  let buffer = "";
-  let sources: string[] = [];
-  let receivedAny = false;
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => {
+    console.warn("[WebTalkAI] Request timed out after", CHAT_TIMEOUT_MS, "ms");
+    controller.abort();
+  }, CHAT_TIMEOUT_MS);
+
+  const t0 = performance.now();
+  console.log("[WebTalkAI] → REST POST /widget/chat", { message: text, conversation_id: sessionId });
 
   try {
-    const res = await fetch(`${cfg.apiUrl}/api/v1/widget/chat/stream`, {
+    const res = await fetch(`${cfg.apiUrl}/api/v1/widget/chat`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
         "X-API-Key": cfg.apiKey,
       },
       body: JSON.stringify({
+        api_key: cfg.apiKey,
         message: text,
-        session_id: sessionId,
-        client_id: boot?.client_id ?? "",
+        conversation_id: sessionId,
       }),
+      signal: controller.signal,
     });
 
-    if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
+    clearTimeout(timeoutId);
+    const dt = Math.round(performance.now() - t0);
+    console.log("[WebTalkAI] ← status", res.status, "in", dt, "ms");
 
-    const reader = res.body.getReader();
-    const decoder = new TextDecoder();
-    let raw = "";
-
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      raw += decoder.decode(value, { stream: true });
-      const lines = raw.split("\n");
-      raw = lines.pop() ?? "";
-
-      for (const line of lines) {
-        if (!line.startsWith("data: ")) continue;
-        const data = line.slice(6).trim();
-        if (data === "[DONE]") break;
-        try {
-          const event = JSON.parse(data);
-          receivedAny = true;
-          if (event.type === "sources") {
-            sources = event.sources ?? [];
-          } else if (event.type === "token") {
-            buffer += event.text;
-            const last = messages[messages.length - 1];
-            if (last && last.role === "assistant") {
-              last.content = buffer;
-              last.sources = sources;
-            }
-            renderMessages();
-          } else if (event.type === "done") {
-            const last = messages[messages.length - 1];
-            if (last) {
-              last.content = event.answer || buffer;
-              last.sources = sources;
-              last.streaming = false;
-            }
-            renderMessages();
-          } else if (event.type === "error") {
-            throw new Error(event.message || "Stream error");
-          }
-        } catch (e) { /* malformed chunk */ }
-      }
+    if (!res.ok) {
+      let bodyText = "";
+      try { bodyText = await res.text(); } catch {}
+      console.error("[WebTalkAI] HTTP", res.status, bodyText);
+      let humanMsg = `Server returned ${res.status}.`;
+      if (res.status === 401) humanMsg = "Invalid API key.";
+      else if (res.status === 404) humanMsg = "Endpoint not found.";
+      else if (res.status === 429) humanMsg = "Too many requests. Please wait a moment.";
+      else if (res.status >= 500) humanMsg = "The AI is having trouble. Please try again.";
+      throw new Error(humanMsg);
     }
 
-    if (!receivedAny) throw new Error("No response from server");
+    const data = await res.json();
+    console.log("[WebTalkAI] response:", { len: data.response?.length, sources: data.sources?.length });
 
-    // Optionally play TTS audio of the answer
-    if (cfg.ttsAutoPlay && buffer) {
-      playTTS(buffer).catch(() => {});
+    const answer: string = data.response || data.answer || "I couldn't generate a response. Please try again.";
+    const sources: string[] = data.sources || [];
+
+    const last = messages[messages.length - 1];
+    if (last) {
+      last.content = answer;
+      last.sources = sources;
+      last.streaming = false;
+    }
+    renderMessages();
+
+    // Optional TTS playback for typed answers
+    if (cfg.ttsAutoPlay && answer) {
+      playTTS(answer).catch(e => console.warn("[WebTalkAI] TTS failed:", e));
     }
   } catch (err) {
+    clearTimeout(timeoutId);
+    const dt = Math.round(performance.now() - t0);
+    console.error("[WebTalkAI] Chat failed after", dt, "ms:", err);
+
+    let msg = "Something went wrong. Please try again.";
+    if (err instanceof DOMException && err.name === "AbortError") {
+      msg = "The AI is starting up — please wait a moment and try again. (The server sleeps when idle on free hosting.)";
+    } else if (err instanceof TypeError && err.message === "Failed to fetch") {
+      msg = "Couldn't reach the server. Please check your connection.";
+    } else if (err instanceof Error) {
+      msg = err.message;
+    }
+
     const last = messages[messages.length - 1];
-    const msg = err instanceof Error
-      ? (err.message === "Failed to fetch"
-          ? "Couldn't reach the server. Please check your connection."
-          : err.message)
-      : "Something went wrong.";
     if (last && last.streaming) {
       last.content = msg;
       last.streaming = false;
@@ -608,18 +619,33 @@ async function init(opts: InitOpts) {
 
   sessionId = getOrCreateSession();
 
+  console.log("[WebTalkAI] init v" + VERSION, {
+    apiUrl: cfg.apiUrl,
+    wsUrl: cfg.wsUrl,
+    theme: opts.theme || "purple",
+    position: cfg.position,
+    voiceEnabled: cfg.voiceEnabled,
+    sessionId,
+  });
+
   // Fetch tenant info
+  const t0 = performance.now();
   try {
     const res = await fetch(
       `${cfg.apiUrl}/api/v1/widget/config?api_key=${encodeURIComponent(cfg.apiKey)}`
     );
+    const dt = Math.round(performance.now() - t0);
     if (!res.ok) {
-      console.error("[WebTalkAI] Invalid API key or backend unreachable (status " + res.status + ")");
+      console.error(
+        `[WebTalkAI] Bootstrap failed: HTTP ${res.status} after ${dt}ms. ` +
+        `Check that the API key is valid and that ${cfg.apiUrl} is reachable.`
+      );
       return;
     }
     boot = await res.json();
+    console.log("[WebTalkAI] connected in", dt, "ms — tenant:", boot?.company_name);
   } catch (e) {
-    console.error("[WebTalkAI] Failed to initialize:", e);
+    console.error("[WebTalkAI] Bootstrap failed (network):", e);
     return;
   }
 

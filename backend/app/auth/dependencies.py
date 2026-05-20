@@ -48,20 +48,26 @@ async def get_client_from_api_key(
     if not api_key:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="API key required")
 
-    result = (
-        db.table("api_keys")
-        .select("*, clients(*)")
-        .eq("key_hash", _hash_key(api_key))
-        .eq("is_active", True)
-        .single()
-        .execute()
-    )
-
-    if not result.data:
+    try:
+        result = (
+            db.table("api_keys")
+            .select("*, clients(*)")
+            .eq("key_hash", _hash_key(api_key))
+            .eq("is_active", True)
+            .maybe_single()
+            .execute()
+        )
+    except Exception:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
 
-    # Update last_used_at
-    db.table("api_keys").update({"last_used_at": "now()"}).eq("id", result.data["id"]).execute()
+    if not result or not result.data:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid API key")
+
+    # Update last_used_at (best-effort)
+    try:
+        db.table("api_keys").update({"last_used_at": "now()"}).eq("id", result.data["id"]).execute()
+    except Exception:
+        pass
 
     return result.data["clients"]
 
