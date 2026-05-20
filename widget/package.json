@@ -1,0 +1,14 @@
+{
+  "name": "webtalk-ai-widget",
+  "version": "1.0.0",
+  "description": "Embeddable AI voice + text widget for WebTalk AI",
+  "main": "dist/widget.js",
+  "scripts": {
+    "build": "esbuild src/widget.ts --bundle --minify --outfile=dist/widget.js --platform=browser --target=es2018",
+    "dev": "esbuild src/widget.ts --bundle --outfile=dist/widget.dev.js --platform=browser --sourcemap"
+  },
+  "devDependencies": {
+    "esbuild": "^0.23.1",
+    "typescript": "^5.6.3"
+  }
+}

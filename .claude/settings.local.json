@@ -1,0 +1,16 @@
+{
+  "permissions": {
+    "allow": [
+      "PowerShell(head -50)",
+      "mcp__8a560380-7201-46f7-ae60-494df8c17897__list_projects",
+      "mcp__8a560380-7201-46f7-ae60-494df8c17897__get_cost",
+      "mcp__8a560380-7201-46f7-ae60-494df8c17897__confirm_cost",
+      "mcp__8a560380-7201-46f7-ae60-494df8c17897__create_project",
+      "mcp__8a560380-7201-46f7-ae60-494df8c17897__apply_migration",
+      "mcp__8a560380-7201-46f7-ae60-494df8c17897__get_project_url",
+      "mcp__8a560380-7201-46f7-ae60-494df8c17897__get_publishable_keys",
+      "PowerShell(docker --version)",
+      "PowerShell(docker compose version 2>&1)"
+    ]
+  }
+}
