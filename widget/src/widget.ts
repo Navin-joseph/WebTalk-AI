@@ -88,8 +88,9 @@ let mediaRecorder: MediaRecorder | null = null;
 let micStream: MediaStream | null = null;
 let voiceCancelled = false;
 
-// Audio playback state
-let audioEl: HTMLAudioElement | null = null;
+// Audio playback state (AudioContext API — more reliable than <audio>+Blob)
+let audioContext: AudioContext | null = null;
+let currentAudioSource: AudioBufferSourceNode | null = null;
 
 // DOM
 let launcherEl: HTMLButtonElement;
@@ -446,11 +447,58 @@ async function sendText(textOverride?: string) {
   }
 }
 
-// ────────────────────────── TTS playback ──────────────────────────
+// ────────────────────────── Audio playback ──────────────────────────
+//
+// Uses the Web Audio API instead of <audio>+Blob URLs.
+//
+// Why: Chrome's <audio> element issues byte-range requests on blob URLs,
+// which often fails with ERR_REQUEST_RANGE_NOT_SATISFIABLE. Decoding the
+// entire MP3 into an AudioBuffer up front sidesteps the problem entirely
+// and gives us start/stop control for interruptions.
+
+function getAudioContext(): AudioContext {
+  if (!audioContext) {
+    const Ctx = window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext;
+    audioContext = new Ctx();
+  }
+  return audioContext;
+}
+
+function stopCurrentAudio() {
+  if (currentAudioSource) {
+    try { currentAudioSource.stop(); } catch { /* already stopped */ }
+    currentAudioSource = null;
+  }
+}
+
+async function playAudioBuffer(buffer: ArrayBuffer): Promise<void> {
+  if (buffer.byteLength === 0) {
+    console.warn("[WebTalkAI] Empty audio buffer — skipping playback");
+    return;
+  }
+  stopCurrentAudio();
+  const ctx = getAudioContext();
+  // Resume if suspended (Chrome autoplay policy)
+  if (ctx.state === "suspended") await ctx.resume();
+
+  // decodeAudioData consumes the ArrayBuffer; pass a copy so caller can reuse it
+  const audioBuffer = await ctx.decodeAudioData(buffer.slice(0));
+  const source = ctx.createBufferSource();
+  source.buffer = audioBuffer;
+  source.connect(ctx.destination);
+
+  return new Promise<void>((resolve) => {
+    source.onended = () => {
+      if (currentAudioSource === source) currentAudioSource = null;
+      resolve();
+    };
+    currentAudioSource = source;
+    source.start(0);
+  });
+}
 
 async function playTTS(text: string) {
   try {
-    if (audioEl) { audioEl.pause(); audioEl = null; }
     const res = await fetch(`${cfg.apiUrl}/api/v1/widget/tts`, {
       method: "POST",
       headers: {
@@ -459,12 +507,13 @@ async function playTTS(text: string) {
       },
       body: JSON.stringify({ text }),
     });
-    if (!res.ok) return;
-    const blob = await res.blob();
-    const url = URL.createObjectURL(blob);
-    audioEl = new Audio(url);
-    audioEl.onended = () => URL.revokeObjectURL(url);
-    await audioEl.play();
+    if (!res.ok) {
+      console.warn("[WebTalkAI] TTS HTTP", res.status);
+      return;
+    }
+    const buffer = await res.arrayBuffer();
+    console.log("[WebTalkAI] TTS audio:", buffer.byteLength, "bytes");
+    await playAudioBuffer(buffer);
   } catch (e) {
     console.warn("[WebTalkAI] TTS playback failed:", e);
   }
@@ -539,21 +588,18 @@ async function startVoice() {
       let pos = 0;
       for (const c of audioChunks) { buf.set(c, pos); pos += c.length; }
       audioChunks.length = 0;
-      const blob = new Blob([buf], { type: "audio/mpeg" });
-      const url = URL.createObjectURL(blob);
-      if (audioEl) audioEl.pause();
-      audioEl = new Audio(url);
-      audioEl.onended = () => {
-        URL.revokeObjectURL(url);
-        // Ready for next round of listening
-        if (!voiceCancelled) {
-          voiceStatusEl.textContent = "Listening…";
-          if (mediaRecorder && mediaRecorder.state === "inactive") {
-            mediaRecorder.start(300);
+      // Decode + play via AudioContext (reliable, supports interruption)
+      playAudioBuffer(buf.buffer as ArrayBuffer)
+        .then(() => {
+          // Ready for next round of listening
+          if (!voiceCancelled) {
+            voiceStatusEl.textContent = "Listening…";
+            if (mediaRecorder && mediaRecorder.state === "inactive") {
+              mediaRecorder.start(300);
+            }
           }
-        }
-      };
-      audioEl.play().catch(() => {});
+        })
+        .catch((e) => console.warn("[WebTalkAI] voice playback failed:", e));
     } else if (msg.type === "error") {
       voiceStatusEl.textContent = "Error: " + msg.message;
       setTimeout(() => endVoice(true), 1800);
