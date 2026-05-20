@@ -10,7 +10,8 @@
       "mcp__8a560380-7201-46f7-ae60-494df8c17897__get_project_url",
       "mcp__8a560380-7201-46f7-ae60-494df8c17897__get_publishable_keys",
       "PowerShell(docker --version)",
-      "PowerShell(docker compose version 2>&1)"
+      "PowerShell(docker compose version 2>&1)",
+      "PowerShell($content = Get-Content \"N:\\\\WebTalk AI\\\\frontend\\\\public\\\\widget.js\" -Raw; $content.Substring\\(0, 150\\))"
     ]
   }
 }
