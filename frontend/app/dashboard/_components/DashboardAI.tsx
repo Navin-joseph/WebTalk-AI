@@ -157,7 +157,7 @@ export default function DashboardAI() {
     recognition.onstart = () => setListening(true);
     recognition.onend = () => setListening(false);
     recognition.onerror = () => setListening(false);
-    recognition.onresult = (e) => {
+    recognition.onresult = (e: any) => {
       const transcript = e.results[0]?.[0]?.transcript;
       if (transcript) sendMessage(transcript);
     };
