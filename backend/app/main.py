@@ -25,15 +25,8 @@ settings = get_settings()
 APP_BOOT_TIME = time.time()
 
 
-@asynccontextmanager
-async def lifespan(app: FastAPI):
-    """Pre-load heavy resources at startup so first request isn't slow."""
-    logger.info("Starting WebTalk AI backend")
-    logger.info("Groq model: %s", settings.groq_model)
-    logger.info("Qdrant URL: %s", settings.qdrant_url.split("://")[0] + "://...")
-    logger.info("Allowed origins: open (auth-gated)")
-
-    # Pre-load the embedding model (avoids 30-60 sec cold start on first chat)
+async def _preload_embedder():
+    """Download the embedding model in the background after the server is already up."""
     try:
         from .crawler.embeddings import _get_embedder
         t0 = time.time()
@@ -41,6 +34,18 @@ async def lifespan(app: FastAPI):
         logger.info("Embedding model loaded in %.1fs", time.time() - t0)
     except Exception as e:
         logger.warning("Failed to pre-load embedding model: %s — will load on first use", e)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    logger.info("Starting WebTalk AI backend")
+    logger.info("Groq model: %s", settings.groq_model)
+    logger.info("Qdrant URL: %s", settings.qdrant_url.split("://")[0] + "://...")
+    logger.info("Allowed origins: open (auth-gated)")
+
+    # Fire-and-forget: server binds the port immediately, model loads in background.
+    # This prevents Render from timing out on port detection during the 3-5min model download.
+    asyncio.create_task(_preload_embedder())
 
     yield
     logger.info("Shutting down")
