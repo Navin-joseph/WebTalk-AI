@@ -345,7 +345,7 @@
       setStatus("Ask about this site");
       setActive(false);
       render();
-      if (ttsOn && cfg.ttsAutoPlay && fullAnswer) speakText(fullAnswer);
+      if (ttsOn && fullAnswer) speakText(fullAnswer);
     }
   }
 
@@ -358,12 +358,23 @@
     utt.onstart = () => { speaking = true; setStatus("Speaking…"); setActive(true); };
     utt.onend   = () => { speaking = false; setStatus("Ask about this site"); setActive(false); };
     utt.onerror = () => { speaking = false; setStatus("Ask about this site"); setActive(false); };
-    // Prefer a natural English voice if available
+
+    function doSpeak() {
+      const voices = window.speechSynthesis.getVoices();
+      const pref = voices.find(v => /Google US English|Samantha|Karen|Daniel/i.test(v.name))
+                || voices.find(v => v.lang?.startsWith("en"));
+      if (pref) utt.voice = pref;
+      window.speechSynthesis.speak(utt);
+    }
+
+    // getVoices() may return [] on first call — wait for voiceschanged if so
     const voices = window.speechSynthesis.getVoices();
-    const pref = voices.find(v => /Google US English|Samantha|Karen|Daniel/i.test(v.name))
-              || voices.find(v => v.lang?.startsWith("en"));
-    if (pref) utt.voice = pref;
-    window.speechSynthesis.speak(utt);
+    if (voices.length > 0) {
+      doSpeak();
+    } else {
+      window.speechSynthesis.addEventListener("voiceschanged", doSpeak, { once: true });
+      window.speechSynthesis.speak(utt); // also try immediately as fallback
+    }
   }
 
   function stopSpeaking() {
@@ -420,7 +431,7 @@
       ttsAutoPlay: options.ttsAutoPlay === true,
     };
     sessionId = sid();
-    ttsOn = true;
+    ttsOn = options.ttsAutoPlay !== false;
 
     console.log(`[WebTalkAI] v${V} init`, { apiUrl: cfg.apiUrl, theme: themeKey });
 

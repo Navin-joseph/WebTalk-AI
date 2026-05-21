@@ -59,7 +59,7 @@ export default function ApiKeysPage() {
       position: "bottom-right",  // "bottom-right" | "bottom-left"
       theme: "purple",           // "purple" | "blue" | "green" | "dark"
       voiceEnabled: true,        // mic button for voice chat
-      ttsAutoPlay: false         // auto-speak AI replies (optional)
+      ttsAutoPlay: true          // auto-speak AI replies
     });
   });
 </script>`;
