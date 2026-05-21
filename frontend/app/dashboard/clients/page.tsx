@@ -50,7 +50,7 @@ export default function ApiKeysPage() {
     setKeys((prev) => prev.filter((k) => k.id !== id));
   }
 
-  const snippet = `<script src="https://web-talk-ai.vercel.app/widget.js?v=2.1.4"></script>
+  const snippet = `<script src="https://web-talk-ai.vercel.app/widget.js?v=2.2.0"></script>
 <script>
   WebTalkAI.init({
     apiKey: "YOUR_API_KEY",
