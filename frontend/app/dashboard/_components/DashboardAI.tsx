@@ -23,7 +23,8 @@ export default function DashboardAI() {
 
   const sessionId = useRef(`dash_${Date.now()}_${Math.random().toString(36).slice(2)}`);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const recognitionRef = useRef<SpeechRecognition | null>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const recognitionRef = useRef<any>(null);
   const abortRef = useRef<AbortController | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
@@ -144,7 +145,7 @@ export default function DashboardAI() {
     }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const w = window as any;
-    const SR: typeof SpeechRecognition | undefined = w.SpeechRecognition ?? w.webkitSpeechRecognition;
+    const SR = w.SpeechRecognition ?? w.webkitSpeechRecognition;
     if (!SR) {
       alert("Speech recognition is not supported in this browser. Try Chrome or Edge.");
       return;
