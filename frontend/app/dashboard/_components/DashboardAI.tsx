@@ -73,14 +73,17 @@ export default function DashboardAI() {
     abortRef.current = new AbortController();
     let fullAnswer = "";
 
+    // Build history from current messages (exclude the placeholder we just added)
+    const history = messages.map(m => ({ role: m.role, content: m.content }));
+
     try {
-      const res = await fetch(`${API_URL}/api/v1/conversations/playground/stream`, {
+      const res = await fetch(`${API_URL}/api/v1/conversations/assistant/stream`, {
         method: "POST",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${token}`,
         },
-        body: JSON.stringify({ message: text, session_id: sessionId.current }),
+        body: JSON.stringify({ message: text, session_id: sessionId.current, history }),
         signal: abortRef.current.signal,
       });
 
