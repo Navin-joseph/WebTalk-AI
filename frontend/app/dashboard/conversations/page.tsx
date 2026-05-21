@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase";
 import { api } from "@/lib/api";
-import { MessageSquare, Mic, Inbox, Trash2, Loader2, X } from "lucide-react";
+import { MessageSquare, Mic, Inbox, Trash2, Loader2 } from "lucide-react";
 
 interface Conversation {
   id: string;

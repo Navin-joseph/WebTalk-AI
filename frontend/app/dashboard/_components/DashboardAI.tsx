@@ -142,8 +142,9 @@ export default function DashboardAI() {
       recognitionRef.current?.stop();
       return;
     }
-    const SR = (window as typeof window & { webkitSpeechRecognition?: typeof SpeechRecognition })
-      .SpeechRecognition ?? (window as typeof window & { webkitSpeechRecognition?: typeof SpeechRecognition }).webkitSpeechRecognition;
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const w = window as any;
+    const SR: typeof SpeechRecognition | undefined = w.SpeechRecognition ?? w.webkitSpeechRecognition;
     if (!SR) {
       alert("Speech recognition is not supported in this browser. Try Chrome or Edge.");
       return;
