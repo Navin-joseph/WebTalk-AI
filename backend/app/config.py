@@ -35,8 +35,16 @@ class Settings(BaseSettings):
     deepgram_api_key: str
 
     # ElevenLabs
-    elevenlabs_api_key: str
+    elevenlabs_api_key: str = ""
     elevenlabs_voice_id: str = "21m00Tcm4TlvDq8ikWAM"  # Rachel
+
+    # Cartesia
+    cartesia_api_key: str = ""
+    cartesia_voice_id: str = "694f9389-aac1-45b6-b726-9d9369183238"  # Barbershop Man
+    cartesia_model_id: str = "sonic-2"
+
+    # TTS provider: "elevenlabs" | "cartesia"
+    tts_provider: str = "elevenlabs"
 
     # CORS
     allowed_origins: list[str] = ["http://localhost:3000"]

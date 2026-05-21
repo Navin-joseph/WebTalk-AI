@@ -5,7 +5,7 @@ from fastapi import WebSocket, WebSocketDisconnect, Query
 from supabase import Client
 from ..rag.pipeline import RAGPipeline
 from ..voice.stt import DeepgramSTT
-from ..voice.tts import ElevenLabsTTS
+from ..voice.tts import get_tts
 from ..database import get_supabase
 
 
@@ -43,7 +43,7 @@ async def voice_websocket_handler(
 
     rag = RAGPipeline()
     stt = DeepgramSTT()
-    tts = ElevenLabsTTS()
+    tts = get_tts()
     conversation_history: list[dict] = []
     audio_buffer = bytearray()
 

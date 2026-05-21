@@ -1,0 +1,101 @@
+# Render Blueprint — defines all services for WebTalk AI.
+# Docs: https://render.com/docs/blueprint-spec
+#
+# First-time setup:
+#   1. Connect this repo in the Render dashboard → "New Blueprint"
+#   2. Set every env var marked  sync: false  in the Render dashboard.
+#   3. After the backend is live, copy its public URL into NEXT_PUBLIC_API_URL
+#      on the frontend service and trigger a redeploy.
+#   4. Disable "Auto-Deploy" on both web services (Render dashboard → Settings).
+#      Deploys are triggered by GitHub Actions after CI passes instead.
+#   5. Copy each service's Deploy Hook URL into GitHub → Settings → Secrets:
+#        RENDER_BACKEND_DEPLOY_HOOK
+#        RENDER_FRONTEND_DEPLOY_HOOK
+
+services:
+  # ── Backend (FastAPI) ────────────────────────────────────────────────────────
+  - type: web
+    name: webtalk-backend
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    dockerContext: ./backend
+    plan: starter
+    healthCheckPath: /health
+    autoDeploy: false
+    envVars:
+      - key: SECRET_KEY
+        generateValue: true
+
+      # Supabase
+      - key: SUPABASE_URL
+        sync: false
+      - key: SUPABASE_ANON_KEY
+        sync: false
+      - key: SUPABASE_SERVICE_ROLE_KEY
+        sync: false
+      - key: SUPABASE_JWT_SECRET
+        sync: false
+
+      # Redis — wired automatically from the managed Redis service below
+      - key: REDIS_URL
+        fromService:
+          name: webtalk-redis
+          type: redis
+          property: connectionString
+
+      # Qdrant (external — e.g. Qdrant Cloud)
+      - key: QDRANT_URL
+        sync: false
+      - key: QDRANT_API_KEY
+        sync: false
+
+      # Groq
+      - key: GROQ_API_KEY
+        sync: false
+      - key: GROQ_MODEL
+        value: llama-3.3-70b-versatile
+
+      # Deepgram
+      - key: DEEPGRAM_API_KEY
+        sync: false
+
+      # TTS — set TTS_PROVIDER to "elevenlabs" or "cartesia"
+      - key: TTS_PROVIDER
+        value: elevenlabs
+      - key: ELEVENLABS_API_KEY
+        sync: false
+      - key: ELEVENLABS_VOICE_ID
+        value: 21m00Tcm4TlvDq8ikWAM
+      - key: CARTESIA_API_KEY
+        sync: false
+      - key: CARTESIA_VOICE_ID
+        sync: false
+      - key: CARTESIA_MODEL_ID
+        value: sonic-2
+
+      # CORS — add your frontend's onrender.com URL once it's deployed
+      - key: ALLOWED_ORIGINS
+        sync: false
+
+  # ── Frontend (Next.js) ───────────────────────────────────────────────────────
+  - type: web
+    name: webtalk-frontend
+    runtime: node
+    buildCommand: cd frontend && npm ci && npm run build
+    startCommand: cd frontend && npm run start
+    plan: starter
+    autoDeploy: false
+    envVars:
+      - key: NEXT_PUBLIC_SUPABASE_URL
+        sync: false
+      - key: NEXT_PUBLIC_SUPABASE_ANON_KEY
+        sync: false
+      # Set to the backend's public Render URL after first backend deploy.
+      - key: NEXT_PUBLIC_API_URL
+        sync: false
+
+  # ── Redis (managed) ──────────────────────────────────────────────────────────
+  - type: redis
+    name: webtalk-redis
+    plan: starter
+    maxmemoryPolicy: allkeys-lru
