@@ -86,7 +86,7 @@ class AnalyticsResponse(BaseModel):
 class ChatRequest(BaseModel):
     message: str
     session_id: str
-    client_id: str
+    client_id: str | None = None  # resolved server-side from JWT or API key
     use_voice: bool = False
 
 
