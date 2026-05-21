@@ -1,0 +1,813 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width,initial-scale=1" />
+<title>WebTalk AI — Diagnostic Test Suite</title>
+<style>
+  :root {
+    --bg: #0f1117; --surface: #1a1d27; --surface2: #222636;
+    --border: #2d3148; --brand: #7c3aed; --brand2: #a855f7;
+    --green: #10b981; --red: #ef4444; --amber: #f59e0b; --blue: #3b82f6;
+    --text: #e2e8f0; --muted: #64748b; --dim: #94a3b8;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { background: var(--bg); color: var(--text); min-height: 100vh; }
+
+  /* Layout */
+  .header { background: var(--surface); border-bottom: 1px solid var(--border); padding: 14px 24px; display: flex; align-items: center; gap: 12px; position: sticky; top: 0; z-index: 100; }
+  .logo { width: 32px; height: 32px; border-radius: 8px; background: linear-gradient(135deg,var(--brand),var(--brand2)); display: flex; align-items: center; justify-content: center; font-size: 15px; flex-shrink: 0; }
+  .header h1 { font-size: 15px; font-weight: 700; color: var(--text); }
+  .header .sub { font-size: 12px; color: var(--muted); }
+  .header .spacer { flex: 1; }
+  .pill { font-size: 11px; padding: 3px 10px; border-radius: 99px; font-weight: 600; border: 1px solid; }
+  .pill.ok    { background: rgba(16,185,129,.12); color: var(--green); border-color: rgba(16,185,129,.3); }
+  .pill.error { background: rgba(239,68,68,.12);  color: var(--red);   border-color: rgba(239,68,68,.3); }
+  .pill.idle  { background: rgba(100,116,139,.12); color: var(--muted); border-color: rgba(100,116,139,.3); }
+
+  .main { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 20px 24px; max-width: 1400px; margin: 0 auto; }
+  @media (max-width: 900px) { .main { grid-template-columns: 1fr; } }
+
+  /* Cards */
+  .card { background: var(--surface); border: 1px solid var(--border); border-radius: 16px; overflow: hidden; }
+  .card-header { padding: 14px 18px; border-bottom: 1px solid var(--border); display: flex; align-items: center; gap: 10px; background: var(--surface2); }
+  .card-title { font-size: 13px; font-weight: 700; letter-spacing: .3px; }
+  .card-body { padding: 16px 18px; }
+  .card-icon { width: 28px; height: 28px; border-radius: 8px; display: flex; align-items: center; justify-content: center; font-size: 14px; flex-shrink: 0; }
+
+  /* Config */
+  .config-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+  @media (max-width: 900px) { .config-grid { grid-template-columns: 1fr; } }
+  .field { display: flex; flex-direction: column; gap: 5px; }
+  .field label { font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .5px; color: var(--muted); }
+  .field input, .field select { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; font-size: 13px; color: var(--text); width: 100%; outline: none; transition: border-color .15s; font-family: "Fira Code", monospace; }
+  .field input:focus, .field select:focus { border-color: var(--brand); }
+
+  /* Buttons */
+  .btn { display: inline-flex; align-items: center; gap: 6px; padding: 8px 14px; border-radius: 8px; font-size: 12px; font-weight: 600; cursor: pointer; border: none; transition: all .15s; white-space: nowrap; }
+  .btn-primary { background: linear-gradient(135deg,var(--brand),var(--brand2)); color: #fff; }
+  .btn-primary:hover { opacity: .88; }
+  .btn-ghost  { background: var(--surface2); color: var(--dim); border: 1px solid var(--border); }
+  .btn-ghost:hover { border-color: var(--brand); color: var(--text); }
+  .btn-danger { background: rgba(239,68,68,.15); color: var(--red); border: 1px solid rgba(239,68,68,.3); }
+  .btn-danger:hover { background: rgba(239,68,68,.25); }
+  .btn:disabled { opacity: .4; cursor: not-allowed; }
+  .btn-row { display: flex; gap: 8px; flex-wrap: wrap; margin-top: 12px; }
+
+  /* Status dots */
+  .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; flex-shrink: 0; }
+  .dot.ok     { background: var(--green); box-shadow: 0 0 6px var(--green); }
+  .dot.error  { background: var(--red);   box-shadow: 0 0 6px var(--red); }
+  .dot.warn   { background: var(--amber); box-shadow: 0 0 6px var(--amber); }
+  .dot.idle   { background: var(--muted); }
+  .dot.pulse  { animation: blink 1s ease-in-out infinite; }
+  @keyframes blink { 0%,100% { opacity: 1; } 50% { opacity: .3; } }
+
+  /* Check list */
+  .check-list { display: flex; flex-direction: column; gap: 7px; }
+  .check-row  { display: flex; align-items: center; gap: 10px; font-size: 12px; }
+  .check-key  { color: var(--muted); min-width: 140px; }
+  .check-val  { color: var(--dim); font-family: "Fira Code", monospace; font-size: 11px; }
+
+  /* Chat */
+  .chat-messages { height: 220px; overflow-y: auto; background: var(--bg); border-radius: 10px; border: 1px solid var(--border); padding: 12px; display: flex; flex-direction: column; gap: 8px; margin-bottom: 10px; }
+  .msg { max-width: 85%; padding: 8px 12px; border-radius: 12px; font-size: 12px; line-height: 1.5; }
+  .msg.user { background: linear-gradient(135deg,var(--brand),var(--brand2)); color: #fff; align-self: flex-end; border-bottom-right-radius: 4px; }
+  .msg.ai   { background: var(--surface2); color: var(--text); align-self: flex-start; border-bottom-left-radius: 4px; }
+  .msg.sys  { background: transparent; color: var(--muted); font-style: italic; align-self: center; font-size: 11px; }
+  .chat-input-row { display: flex; gap: 8px; }
+  .chat-input-row input { flex: 1; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 8px 12px; font-size: 13px; color: var(--text); outline: none; }
+  .chat-input-row input:focus { border-color: var(--brand); }
+
+  /* Log */
+  .log { background: var(--bg); border: 1px solid var(--border); border-radius: 10px; height: 260px; overflow-y: auto; padding: 10px 12px; font-family: "Fira Code", monospace; font-size: 11px; display: flex; flex-direction: column; gap: 2px; }
+  .log-entry { display: flex; gap: 10px; line-height: 1.5; }
+  .log-time  { color: var(--muted); flex-shrink: 0; min-width: 80px; }
+  .log-lvl   { flex-shrink: 0; min-width: 50px; font-weight: 700; }
+  .log-lvl.INFO  { color: var(--blue); }
+  .log-lvl.OK    { color: var(--green); }
+  .log-lvl.WARN  { color: var(--amber); }
+  .log-lvl.ERROR { color: var(--red); }
+  .log-msg   { color: var(--dim); word-break: break-all; }
+
+  /* Latency badges */
+  .latency-grid { display: grid; grid-template-columns: repeat(3,1fr); gap: 8px; }
+  .lat-card { background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; text-align: center; }
+  .lat-val  { font-size: 22px; font-weight: 800; background: linear-gradient(135deg,var(--brand),var(--brand2)); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+  .lat-label{ font-size: 10px; color: var(--muted); margin-top: 2px; text-transform: uppercase; letter-spacing: .5px; }
+
+  /* WS */
+  .ws-status { display: flex; align-items: center; gap: 8px; font-size: 12px; color: var(--muted); margin-bottom: 10px; }
+  .audio-viz { height: 40px; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  canvas { width: 100%; height: 100%; display: block; }
+
+  /* Widget embed */
+  .widget-preview { background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 16px; min-height: 120px; display: flex; align-items: center; justify-content: center; color: var(--muted); font-size: 12px; text-align: center; position: relative; }
+
+  /* Health grid */
+  .health-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; }
+  .health-item { display: flex; align-items: center; gap: 8px; background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px; }
+  .health-item .name { font-size: 12px; color: var(--dim); flex: 1; }
+  .health-item .val  { font-size: 11px; color: var(--muted); font-family: monospace; }
+
+  hr.divider { border: none; border-top: 1px solid var(--border); margin: 12px 0; }
+  .col-span-2 { grid-column: span 2; }
+  @media (max-width: 900px) { .col-span-2 { grid-column: span 1; } }
+</style>
+</head>
+<body>
+
+<!-- ═══════════════ HEADER ═══════════════ -->
+<div class="header">
+  <div class="logo">🤖</div>
+  <div>
+    <div class="header h1" style="font-size:15px;font-weight:700">WebTalk AI — Diagnostic Suite</div>
+    <div class="sub">Full end-to-end test: health · chat · voice · widget · latency</div>
+  </div>
+  <div class="spacer"></div>
+  <span id="global-status" class="pill idle">Not tested</span>
+</div>
+
+<!-- ═══════════════ MAIN GRID ═══════════════ -->
+<div class="main">
+
+  <!-- ── CONFIG ── -->
+  <div class="card col-span-2">
+    <div class="card-header">
+      <div class="card-icon" style="background:rgba(124,58,237,.2)">⚙️</div>
+      <span class="card-title">Configuration</span>
+      <span class="spacer"></span>
+      <button class="btn btn-ghost" onclick="saveConfig()">💾 Save</button>
+      <button class="btn btn-primary" onclick="runAll()" style="margin-left:6px">▶ Run All Tests</button>
+    </div>
+    <div class="card-body">
+      <div class="config-grid">
+        <div class="field">
+          <label>Backend API URL</label>
+          <input id="cfg-api" value="http://localhost:8000" placeholder="https://your-backend.onrender.com" />
+        </div>
+        <div class="field">
+          <label>Widget / Frontend URL</label>
+          <input id="cfg-widget-url" value="http://localhost:3000" placeholder="https://your-frontend.vercel.app" />
+        </div>
+        <div class="field">
+          <label>API Key (for widget tests)</label>
+          <input id="cfg-key" placeholder="wtk_…" />
+        </div>
+        <div class="field">
+          <label>Test message</label>
+          <input id="cfg-msg" value="What services do you offer?" />
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── HEALTH CHECK ── -->
+  <div class="card">
+    <div class="card-header">
+      <div class="card-icon" style="background:rgba(16,185,129,.2)">💚</div>
+      <span class="card-title">Health Check</span>
+      <span class="spacer"></span>
+      <span id="health-status" class="pill idle">—</span>
+      <button class="btn btn-ghost" onclick="runHealth()" style="margin-left:8px">Run</button>
+    </div>
+    <div class="card-body">
+      <div id="health-uptime" style="font-size:11px;color:var(--muted);margin-bottom:10px">Not checked yet</div>
+      <div id="health-grid" class="health-grid">
+        <div class="health-item"><span class="dot idle" id="hd-groq"></span><span class="name">Groq API</span><span class="val" id="hv-groq">—</span></div>
+        <div class="health-item"><span class="dot idle" id="hd-qdrant"></span><span class="name">Qdrant</span><span class="val" id="hv-qdrant">—</span></div>
+        <div class="health-item"><span class="dot idle" id="hd-supabase"></span><span class="name">Supabase URL</span><span class="val" id="hv-supabase">—</span></div>
+        <div class="health-item"><span class="dot idle" id="hd-embedder"></span><span class="name">Embedder</span><span class="val" id="hv-embedder">—</span></div>
+        <div class="health-item"><span class="dot idle" id="hd-groq-key"></span><span class="name">Groq key set</span><span class="val" id="hv-groq-key">—</span></div>
+        <div class="health-item"><span class="dot idle" id="hd-qdrant-key"></span><span class="name">Qdrant key set</span><span class="val" id="hv-qdrant-key">—</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── TEXT CHAT ── -->
+  <div class="card">
+    <div class="card-header">
+      <div class="card-icon" style="background:rgba(59,130,246,.2)">💬</div>
+      <span class="card-title">Text Chat (REST /widget/chat)</span>
+      <span class="spacer"></span>
+      <span id="chat-latency" style="font-size:11px;color:var(--muted)"></span>
+      <span id="chat-status" class="pill idle" style="margin-left:8px">—</span>
+    </div>
+    <div class="card-body">
+      <div id="chat-messages" class="chat-messages">
+        <div class="msg sys">Send a message to test the REST chat API</div>
+      </div>
+      <div class="chat-input-row">
+        <input id="chat-input" placeholder="Type a message…" onkeydown="if(event.key==='Enter')sendChat()" />
+        <button class="btn btn-primary" onclick="sendChat()">Send</button>
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-ghost" onclick="testChatSuite()">🧪 Run suite (5 msgs)</button>
+        <button class="btn btn-ghost" onclick="clearChat()">Clear</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── WEBSOCKET VOICE ── -->
+  <div class="card">
+    <div class="card-header">
+      <div class="card-icon" style="background:rgba(245,158,11,.2)">🎙</div>
+      <span class="card-title">WebSocket Voice Pipeline</span>
+      <span class="spacer"></span>
+      <span id="ws-pill" class="pill idle">Disconnected</span>
+    </div>
+    <div class="card-body">
+      <div class="ws-status">
+        <span class="dot idle pulse" id="ws-dot"></span>
+        <span id="ws-state">Idle — connect to begin</span>
+      </div>
+      <div class="field" style="margin-bottom:10px">
+        <label>Client ID (from /widget/config)</label>
+        <input id="ws-client-id" placeholder="uuid from API" />
+      </div>
+      <div class="audio-viz" style="margin-bottom:10px">
+        <canvas id="audio-canvas"></canvas>
+      </div>
+      <div id="ws-transcript" style="font-size:12px;color:var(--dim);min-height:20px;margin-bottom:8px"></div>
+      <div id="ws-answer" style="font-size:12px;color:var(--text);min-height:20px;background:var(--bg);border-radius:8px;padding:8px;border:1px solid var(--border);display:none"></div>
+      <div class="btn-row">
+        <button class="btn btn-primary" id="btn-ws-connect" onclick="wsConnect()">Connect</button>
+        <button class="btn btn-ghost" id="btn-mic" onclick="toggleMic()" disabled>🎙 Hold to speak</button>
+        <button class="btn btn-danger" onclick="wsDisconnect()">Disconnect</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── TTS TEST ── -->
+  <div class="card">
+    <div class="card-header">
+      <div class="card-icon" style="background:rgba(168,85,247,.2)">🔊</div>
+      <span class="card-title">TTS Test (/widget/tts)</span>
+      <span class="spacer"></span>
+      <span id="tts-status" class="pill idle">—</span>
+    </div>
+    <div class="card-body">
+      <div class="field" style="margin-bottom:10px">
+        <label>Text to synthesize</label>
+        <input id="tts-text" value="Hello! I'm your AI assistant. How can I help you today?" />
+      </div>
+      <div id="tts-audio-container" style="margin-bottom:10px;display:none">
+        <audio id="tts-audio" controls style="width:100%;height:36px;"></audio>
+      </div>
+      <div id="tts-info" style="font-size:11px;color:var(--muted);margin-bottom:8px"></div>
+      <div class="btn-row">
+        <button class="btn btn-primary" onclick="testTTS()">Synthesize & Play</button>
+        <button class="btn btn-ghost" onclick="testBrowserTTS()">🌐 Browser TTS fallback</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── WIDGET EMBED ── -->
+  <div class="card">
+    <div class="card-header">
+      <div class="card-icon" style="background:rgba(16,185,129,.2)">🧩</div>
+      <span class="card-title">Live Widget Injection</span>
+      <span class="spacer"></span>
+      <span id="widget-status" class="pill idle">—</span>
+    </div>
+    <div class="card-body">
+      <div class="widget-preview" id="widget-preview-area">
+        Widget will appear here after injection. Look for the chat bubble (bottom-right of this page).
+      </div>
+      <div class="btn-row">
+        <button class="btn btn-primary" onclick="injectWidget()">Inject Widget</button>
+        <button class="btn btn-ghost" onclick="removeWidget()">Remove</button>
+        <button class="btn btn-ghost" onclick="fetchWidgetConfig()">Fetch Config</button>
+      </div>
+      <pre id="widget-config-out" style="font-size:10px;color:var(--muted);margin-top:10px;white-space:pre-wrap;display:none"></pre>
+    </div>
+  </div>
+
+  <!-- ── LATENCY MONITOR ── -->
+  <div class="card">
+    <div class="card-header">
+      <div class="card-icon" style="background:rgba(59,130,246,.2)">⚡</div>
+      <span class="card-title">Latency Monitor</span>
+      <span class="spacer"></span>
+      <button class="btn btn-ghost" onclick="resetLatency()">Reset</button>
+    </div>
+    <div class="card-body">
+      <div class="latency-grid">
+        <div class="lat-card">
+          <div class="lat-val" id="lat-health">—</div>
+          <div class="lat-label">Health check</div>
+        </div>
+        <div class="lat-card">
+          <div class="lat-val" id="lat-chat">—</div>
+          <div class="lat-label">Text chat avg</div>
+        </div>
+        <div class="lat-card">
+          <div class="lat-val" id="lat-tts">—</div>
+          <div class="lat-label">TTS synthesis</div>
+        </div>
+        <div class="lat-card">
+          <div class="lat-val" id="lat-config">—</div>
+          <div class="lat-label">Widget config</div>
+        </div>
+        <div class="lat-card">
+          <div class="lat-val" id="lat-ws">—</div>
+          <div class="lat-label">WS first reply</div>
+        </div>
+        <div class="lat-card">
+          <div class="lat-val" id="lat-p90">—</div>
+          <div class="lat-label">Chat p90</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ── DIAGNOSTIC LOG ── -->
+  <div class="card col-span-2">
+    <div class="card-header">
+      <div class="card-icon" style="background:rgba(100,116,139,.2)">📋</div>
+      <span class="card-title">Diagnostic Log</span>
+      <span class="spacer"></span>
+      <button class="btn btn-ghost" onclick="clearLog()">Clear</button>
+      <button class="btn btn-ghost" onclick="copyLog()" style="margin-left:6px">Copy</button>
+    </div>
+    <div class="card-body">
+      <div id="log" class="log"></div>
+    </div>
+  </div>
+
+</div><!-- /main -->
+
+<!-- ═══════════════ SCRIPT ═══════════════ -->
+<script>
+// ── Config helpers ──────────────────────────────────────────────────────────
+const getApi    = () => document.getElementById("cfg-api").value.replace(/\/$/, "");
+const getKey    = () => document.getElementById("cfg-key").value.trim();
+const getMsg    = () => document.getElementById("cfg-msg").value.trim();
+const getWidgetUrl = () => document.getElementById("cfg-widget-url").value.replace(/\/$/, "");
+
+function saveConfig() {
+  ["cfg-api","cfg-widget-url","cfg-key","cfg-msg"].forEach(id => {
+    localStorage.setItem(id, document.getElementById(id).value);
+  });
+  log("INFO", "Config saved to localStorage");
+}
+
+function loadConfig() {
+  ["cfg-api","cfg-widget-url","cfg-key","cfg-msg"].forEach(id => {
+    const v = localStorage.getItem(id);
+    if (v) document.getElementById(id).value = v;
+  });
+}
+
+// ── Logging ─────────────────────────────────────────────────────────────────
+const logEl = document.getElementById("log");
+function log(level, msg) {
+  const now = new Date();
+  const ts = now.toTimeString().slice(0,8) + "." + String(now.getMilliseconds()).padStart(3,"0");
+  const el = document.createElement("div");
+  el.className = "log-entry";
+  el.innerHTML = `<span class="log-time">${ts}</span><span class="log-lvl ${level}">${level.padEnd(5)}</span><span class="log-msg">${escHtml(msg)}</span>`;
+  logEl.appendChild(el);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+function escHtml(s) { return String(s).replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;"); }
+function clearLog() { logEl.innerHTML = ""; }
+function copyLog() {
+  const text = [...logEl.querySelectorAll(".log-entry")].map(e => e.textContent).join("\n");
+  navigator.clipboard.writeText(text).then(() => log("INFO","Log copied to clipboard"));
+}
+
+// ── Latency tracking ────────────────────────────────────────────────────────
+const latHistory = { chat: [] };
+function setLat(id, ms) {
+  const el = document.getElementById("lat-"+id);
+  if (!el) return;
+  if (ms === null) { el.textContent = "—"; return; }
+  el.textContent = ms < 1000 ? ms+"ms" : (ms/1000).toFixed(1)+"s";
+}
+function trackChat(ms) {
+  latHistory.chat.push(ms);
+  const avg = Math.round(latHistory.chat.reduce((a,b)=>a+b,0)/latHistory.chat.length);
+  setLat("chat", avg);
+  if (latHistory.chat.length >= 3) {
+    const sorted = [...latHistory.chat].sort((a,b)=>a-b);
+    const p90 = sorted[Math.floor(sorted.length*.9)];
+    setLat("p90", p90);
+  }
+}
+function resetLatency() {
+  ["health","chat","tts","config","ws","p90"].forEach(k => setLat(k, null));
+  latHistory.chat = [];
+  log("INFO","Latency counters reset");
+}
+
+// ── Health check ────────────────────────────────────────────────────────────
+async function runHealth() {
+  const url = getApi() + "/health?deep=1";
+  log("INFO", "GET " + url);
+  const pill = document.getElementById("health-status");
+  const t0 = Date.now();
+  pill.textContent = "Checking…"; pill.className = "pill idle";
+  try {
+    const r = await fetch(url, { signal: AbortSignal.timeout(15000) });
+    const dt = Date.now() - t0;
+    setLat("health", dt);
+    if (!r.ok) throw new Error("HTTP "+r.status);
+    const d = await r.json();
+    log("OK", `Health: ${d.status} uptime=${d.uptime_sec}s (${dt}ms)`);
+    document.getElementById("health-uptime").textContent =
+      `Status: ${d.status}  ·  Uptime: ${d.uptime_sec}s  ·  Round-trip: ${dt}ms`;
+    pill.textContent = d.status === "ok" ? "OK" : "Degraded";
+    pill.className = d.status === "ok" ? "pill ok" : "pill error";
+    document.getElementById("global-status").textContent = "OK";
+    document.getElementById("global-status").className = "pill ok";
+
+    const checks = d.checks || {};
+    const env = checks.env || {};
+    function setDot(id, ok, val) {
+      const d2 = document.getElementById("hd-"+id);
+      const v2 = document.getElementById("hv-"+id);
+      if (d2) { d2.className = "dot " + (ok ? "ok" : "error"); }
+      if (v2) { v2.textContent = String(val ?? ok); }
+    }
+    setDot("groq",     checks.groq?.ok,          checks.groq?.status ?? (checks.groq?.ok ? "ok" : checks.groq?.error));
+    setDot("qdrant",   checks.qdrant?.ok,         checks.qdrant?.ok ? `${checks.qdrant.collections} collections` : checks.qdrant?.error);
+    setDot("embedder", checks.embedder?.loaded,   checks.embedder?.loaded ? "loaded" : "not loaded");
+    setDot("supabase", env.supabase_url_set,      env.supabase_url_set ? "set" : "missing");
+    setDot("groq-key", env.groq_key_set,          env.groq_key_set ? "set" : "missing");
+    setDot("qdrant-key",env.qdrant_key_set,       env.qdrant_key_set ? "set" : "missing");
+  } catch(e) {
+    log("ERROR", "Health check failed: " + e.message);
+    pill.textContent = "Failed"; pill.className = "pill error";
+    document.getElementById("global-status").textContent = "Failed";
+    document.getElementById("global-status").className = "pill error";
+  }
+}
+
+// ── Text chat ────────────────────────────────────────────────────────────────
+const chatEl = document.getElementById("chat-messages");
+
+function addChatMsg(role, text) {
+  const d = document.createElement("div");
+  d.className = "msg " + role;
+  d.textContent = text;
+  chatEl.appendChild(d);
+  chatEl.scrollTop = chatEl.scrollHeight;
+  return d;
+}
+
+function clearChat() { chatEl.innerHTML = '<div class="msg sys">Cleared</div>'; }
+
+async function sendChatMsg(msg) {
+  const api = getApi();
+  const key = getKey();
+  if (!key) { log("WARN","No API key set — chat test requires an API key"); return null; }
+  const el = addChatMsg("user", msg);
+  const pending = addChatMsg("ai", "…");
+  const t0 = Date.now();
+  document.getElementById("chat-status").textContent = "Sending…";
+  document.getElementById("chat-status").className = "pill idle";
+  try {
+    const r = await fetch(api + "/api/v1/widget/chat", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ api_key: key, message: msg, conversation_id: "test_" + Date.now() }),
+      signal: AbortSignal.timeout(35000),
+    });
+    const dt = Date.now() - t0;
+    trackChat(dt);
+    document.getElementById("chat-latency").textContent = dt + "ms";
+    if (!r.ok) {
+      const err = await r.text();
+      pending.textContent = "Error " + r.status + ": " + err.slice(0,120);
+      pending.style.color = "var(--red)";
+      document.getElementById("chat-status").textContent = "Error"; document.getElementById("chat-status").className = "pill error";
+      log("ERROR", `Chat ${r.status}: ${err.slice(0,200)}`);
+      return null;
+    }
+    const d = await r.json();
+    pending.textContent = d.response;
+    document.getElementById("chat-status").textContent = "OK"; document.getElementById("chat-status").className = "pill ok";
+    log("OK", `Chat reply (${dt}ms): "${d.response.slice(0,80)}…" sources=${d.sources?.length||0}`);
+    return d;
+  } catch(e) {
+    pending.textContent = "Failed: " + e.message;
+    pending.style.color = "var(--red)";
+    document.getElementById("chat-status").textContent = "Failed"; document.getElementById("chat-status").className = "pill error";
+    log("ERROR","Chat failed: "+e.message);
+    return null;
+  }
+}
+
+function sendChat() {
+  const inp = document.getElementById("chat-input");
+  const msg = inp.value.trim() || getMsg();
+  if (!msg) return;
+  inp.value = "";
+  sendChatMsg(msg);
+}
+
+const TEST_MSGS = [
+  "What is this website about?",
+  "What services do you offer?",
+  "How can I contact you?",
+  "What are your pricing options?",
+  "Tell me about your team.",
+];
+
+async function testChatSuite() {
+  log("INFO","Running chat test suite (5 messages)…");
+  for (const m of TEST_MSGS) {
+    await sendChatMsg(m);
+    await new Promise(r => setTimeout(r, 800));
+  }
+  log("OK","Chat suite complete");
+}
+
+// ── Widget config & injection ─────────────────────────────────────────────
+async function fetchWidgetConfig() {
+  const api = getApi();
+  const key = getKey();
+  if (!key) { log("WARN","API key required for widget config"); return; }
+  log("INFO","Fetching widget config…");
+  const t0 = Date.now();
+  try {
+    const r = await fetch(`${api}/api/v1/widget/config?api_key=${encodeURIComponent(key)}`);
+    const dt = Date.now() - t0;
+    setLat("config", dt);
+    const d = await r.json();
+    if (!r.ok) { log("ERROR","Config: " + JSON.stringify(d)); return; }
+    log("OK",`Widget config (${dt}ms): client_id=${d.client_id} name="${d.company_name}"`);
+    const out = document.getElementById("widget-config-out");
+    out.textContent = JSON.stringify(d, null, 2);
+    out.style.display = "block";
+    if (d.client_id) document.getElementById("ws-client-id").value = d.client_id;
+    return d;
+  } catch(e) { log("ERROR","Config fetch failed: "+e.message); }
+}
+
+function injectWidget() {
+  const key = getKey();
+  const widgetUrl = getWidgetUrl();
+  if (!key) { log("WARN","API key required to inject widget"); return; }
+  removeWidget();
+  log("INFO",`Injecting widget from ${widgetUrl}/widget.js`);
+  const s = document.createElement("script");
+  s.id = "webtalk-injected";
+  s.src = `${widgetUrl}/widget.js`;
+  s.onload = () => {
+    log("OK","widget.js loaded — initialising…");
+    try {
+      window.WebTalkAI?.init({
+        apiKey: key,
+        apiUrl: getApi(),
+        position: "bottom-right",
+        theme: "purple",
+        voiceEnabled: true,
+        ttsAutoPlay: false,
+      });
+      document.getElementById("widget-status").textContent = "Injected";
+      document.getElementById("widget-status").className = "pill ok";
+      document.getElementById("widget-preview-area").textContent =
+        "✅ Widget injected — look for the chat bubble in the bottom-right corner of this page.";
+      log("OK","Widget initialised successfully");
+    } catch(e) { log("ERROR","Widget init failed: "+e.message); }
+  };
+  s.onerror = () => {
+    log("ERROR",`Failed to load widget.js from ${widgetUrl}`);
+    document.getElementById("widget-status").textContent = "Load failed";
+    document.getElementById("widget-status").className = "pill error";
+  };
+  document.head.appendChild(s);
+}
+
+function removeWidget() {
+  const old = document.getElementById("webtalk-injected");
+  if (old) old.remove();
+  const container = document.getElementById("webtalk-widget-container");
+  if (container) container.remove();
+  document.getElementById("widget-status").textContent = "—";
+  document.getElementById("widget-status").className = "pill idle";
+  document.getElementById("widget-preview-area").textContent =
+    "Widget will appear here after injection. Look for the chat bubble (bottom-right of this page).";
+  document.getElementById("widget-config-out").style.display = "none";
+}
+
+// ── TTS ───────────────────────────────────────────────────────────────────
+async function testTTS() {
+  const api = getApi();
+  const key = getKey();
+  const text = document.getElementById("tts-text").value.trim();
+  if (!key) { log("WARN","API key required for TTS test"); return; }
+  if (!text) { log("WARN","Enter text to synthesize"); return; }
+  document.getElementById("tts-status").textContent = "Synthesizing…";
+  document.getElementById("tts-status").className = "pill idle";
+  log("INFO",`TTS request: "${text.slice(0,60)}…"`);
+  const t0 = Date.now();
+  try {
+    const r = await fetch(api + "/api/v1/widget/tts", {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-API-Key": key },
+      body: JSON.stringify({ text }),
+      signal: AbortSignal.timeout(30000),
+    });
+    const dt = Date.now() - t0;
+    setLat("tts", dt);
+    if (!r.ok) {
+      const err = await r.text();
+      log("ERROR",`TTS ${r.status}: ${err.slice(0,200)}`);
+      document.getElementById("tts-status").textContent = "Error "+r.status;
+      document.getElementById("tts-status").className = "pill error";
+      return;
+    }
+    const blob = await r.blob();
+    const url = URL.createObjectURL(blob);
+    const audio = document.getElementById("tts-audio");
+    audio.src = url;
+    document.getElementById("tts-audio-container").style.display = "block";
+    document.getElementById("tts-info").textContent = `${Math.round(blob.size/1024)} KB · ${dt}ms`;
+    audio.play().catch(()=>{});
+    document.getElementById("tts-status").textContent = "OK";
+    document.getElementById("tts-status").className = "pill ok";
+    log("OK",`TTS done: ${Math.round(blob.size/1024)}KB in ${dt}ms`);
+  } catch(e) {
+    log("ERROR","TTS failed: "+e.message);
+    document.getElementById("tts-status").textContent = "Failed";
+    document.getElementById("tts-status").className = "pill error";
+  }
+}
+
+function testBrowserTTS() {
+  const text = document.getElementById("tts-text").value.trim();
+  if (!text) return;
+  if (!window.speechSynthesis) { log("WARN","Browser TTS not supported"); return; }
+  window.speechSynthesis.cancel();
+  const u = new SpeechSynthesisUtterance(text);
+  u.onstart = () => log("INFO","Browser TTS speaking…");
+  u.onend   = () => log("OK","Browser TTS done");
+  u.onerror = (e) => log("ERROR","Browser TTS error: "+e.error);
+  window.speechSynthesis.speak(u);
+}
+
+// ── WebSocket voice ────────────────────────────────────────────────────────
+let ws = null, mediaStream = null, mediaRecorder = null, audioCtx = null, analyser = null, animFrame = null;
+
+function wsSetState(state, dotClass) {
+  document.getElementById("ws-state").textContent = state;
+  document.getElementById("ws-dot").className = "dot " + dotClass + (dotClass === "pulse" ? " pulse" : "");
+}
+
+function wsConnect() {
+  const api = getApi().replace(/^https?/, ws => ws === "https" ? "wss" : "ws");
+  const clientId = document.getElementById("ws-client-id").value.trim();
+  const key = getKey();
+  const sessionId = "test_" + Date.now();
+  if (!clientId) { log("WARN","Enter a client ID (fetch it with 'Fetch Config' above)"); return; }
+  if (!key) { log("WARN","API key required for WebSocket connection"); return; }
+  const url = `${api}/ws/voice/${clientId}?session_id=${sessionId}&api_key=${encodeURIComponent(key)}`;
+  log("INFO","Connecting WS: "+url.replace(key,"[key]"));
+  ws = new WebSocket(url);
+
+  const pill = document.getElementById("ws-pill");
+  ws.onopen = () => {
+    log("OK","WebSocket connected");
+    pill.textContent = "Connected"; pill.className = "pill ok";
+    wsSetState("Connected — click 'Hold to speak'", "ok");
+    document.getElementById("btn-mic").disabled = false;
+  };
+  ws.onclose = (e) => {
+    log("WARN",`WS closed: code=${e.code} reason=${e.reason||"none"}`);
+    pill.textContent = "Disconnected"; pill.className = "pill idle";
+    wsSetState("Disconnected", "idle");
+    document.getElementById("btn-mic").disabled = true;
+    ws = null;
+  };
+  ws.onerror = (e) => { log("ERROR","WS error"); };
+  ws.onmessage = (ev) => {
+    const d = JSON.parse(ev.data);
+    if (d.type === "transcript") {
+      document.getElementById("ws-transcript").textContent = "You: " + d.text;
+      log("INFO","STT transcript: "+d.text);
+    } else if (d.type === "answer_text") {
+      const el = document.getElementById("ws-answer");
+      el.style.display = "block";
+      el.textContent = "AI: " + d.text;
+      log("OK","AI response: "+d.text.slice(0,80));
+    } else if (d.type === "audio_chunk") {
+      playAudioChunk(d.data);
+    } else if (d.type === "audio_end") {
+      log("INFO","Audio stream complete");
+      setLat("ws", Date.now() - wsStartTime);
+    } else if (d.type === "error") {
+      log("ERROR","WS server error: "+d.message);
+    }
+  };
+}
+
+let wsStartTime = 0;
+let audioChunks = [];
+
+function playAudioChunk(b64) {
+  const bin = atob(b64);
+  const buf = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) buf[i] = bin.charCodeAt(i);
+  audioChunks.push(buf);
+}
+
+async function toggleMic() {
+  if (mediaRecorder && mediaRecorder.state === "recording") {
+    mediaRecorder.stop();
+    mediaStream?.getTracks().forEach(t => t.stop());
+    stopVisualizer();
+    document.getElementById("btn-mic").textContent = "🎙 Hold to speak";
+    wsSetState("Processing speech…", "pulse");
+    if (ws?.readyState === 1) ws.send(JSON.stringify({ type: "audio_end" }));
+    wsStartTime = Date.now();
+    return;
+  }
+  try {
+    mediaStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+    mediaRecorder = new MediaRecorder(mediaStream, { mimeType: "audio/webm;codecs=opus" });
+    mediaRecorder.ondataavailable = async (e) => {
+      if (e.data.size > 0 && ws?.readyState === 1) {
+        const buf = await e.data.arrayBuffer();
+        const b64 = btoa(String.fromCharCode(...new Uint8Array(buf)));
+        ws.send(JSON.stringify({ type: "audio_chunk", data: b64 }));
+      }
+    };
+    mediaRecorder.start(250);
+    startVisualizer(mediaStream);
+    document.getElementById("btn-mic").textContent = "⏹ Stop recording";
+    wsSetState("Recording — click stop when done", "error pulse");
+    log("INFO","Microphone recording started");
+  } catch(e) {
+    log("ERROR","Mic access failed: "+e.message);
+  }
+}
+
+function wsDisconnect() {
+  ws?.close();
+  mediaRecorder?.stop();
+  mediaStream?.getTracks().forEach(t => t.stop());
+  stopVisualizer();
+}
+
+// ── Audio visualizer ──────────────────────────────────────────────────────
+function startVisualizer(stream) {
+  audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+  analyser = audioCtx.createAnalyser();
+  analyser.fftSize = 256;
+  audioCtx.createMediaStreamSource(stream).connect(analyser);
+  const canvas = document.getElementById("audio-canvas");
+  const ctx = canvas.getContext("2d");
+  const W = canvas.clientWidth, H = canvas.clientHeight;
+  canvas.width = W; canvas.height = H;
+  function draw() {
+    animFrame = requestAnimationFrame(draw);
+    const data = new Uint8Array(analyser.frequencyBinCount);
+    analyser.getByteFrequencyData(data);
+    ctx.clearRect(0, 0, W, H);
+    ctx.fillStyle = "#0f1117";
+    ctx.fillRect(0, 0, W, H);
+    const bw = W / data.length;
+    data.forEach((v, i) => {
+      const pct = v / 255;
+      ctx.fillStyle = `hsl(${260 + pct*40},80%,${40+pct*30}%)`;
+      ctx.fillRect(i * bw, H - (pct * H), bw - 1, pct * H);
+    });
+  }
+  draw();
+}
+
+function stopVisualizer() {
+  cancelAnimationFrame(animFrame);
+  audioCtx?.close().catch(()=>{});
+  audioCtx = null;
+}
+
+// ── Run all ──────────────────────────────────────────────────────────────
+async function runAll() {
+  log("INFO","═══ Running full test suite ═══");
+  await runHealth();
+  await new Promise(r => setTimeout(r, 400));
+  await fetchWidgetConfig();
+  await new Promise(r => setTimeout(r, 400));
+  if (getKey()) {
+    await sendChatMsg(getMsg());
+    await new Promise(r => setTimeout(r, 400));
+    await testTTS();
+  } else {
+    log("WARN","Skipping chat/TTS/widget tests — no API key set");
+  }
+  log("OK","═══ Test suite complete ═══");
+}
+
+// ── Init ─────────────────────────────────────────────────────────────────
+loadConfig();
+log("INFO","WebTalk AI Diagnostic Suite ready");
+log("INFO",`User agent: ${navigator.userAgent.slice(0,80)}`);
+log("INFO","Set your API URL and key above, then click 'Run All Tests'");
+</script>
+</body>
+</html>

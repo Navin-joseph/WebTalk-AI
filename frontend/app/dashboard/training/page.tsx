@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase";
 import { api } from "@/lib/api";
-import { Loader2, CheckCircle2, XCircle, Clock, Globe, Play, FileText } from "lucide-react";
+import { Loader2, CheckCircle2, XCircle, Clock, Globe, Play, FileText, Trash2 } from "lucide-react";
 
 interface Job {
   id: string;
@@ -16,10 +16,10 @@ interface Job {
 
 const statusBadge = (s: Job["status"]) => {
   const map = {
-    pending:   { Icon: Clock,       cls: "bg-amber-50 text-amber-700 border-amber-200" },
-    running:   { Icon: Loader2,     cls: "bg-blue-50 text-blue-700 border-blue-200",   spin: true },
-    completed: { Icon: CheckCircle2,cls: "bg-emerald-50 text-emerald-700 border-emerald-200" },
-    failed:    { Icon: XCircle,     cls: "bg-red-50 text-red-700 border-red-200" },
+    pending:   { Icon: Clock,        cls: "bg-amber-50 text-amber-700 border-amber-200" },
+    running:   { Icon: Loader2,      cls: "bg-blue-50 text-blue-700 border-blue-200",   spin: true },
+    completed: { Icon: CheckCircle2, cls: "bg-emerald-50 text-emerald-700 border-emerald-200" },
+    failed:    { Icon: XCircle,      cls: "bg-red-50 text-red-700 border-red-200" },
   } as const;
   const { Icon, cls, spin } = map[s] as { Icon: React.ElementType; cls: string; spin?: boolean };
   return (
@@ -35,7 +35,9 @@ export default function TrainingPage() {
   const [url, setUrl] = useState("");
   const [maxPages, setMaxPages] = useState(50);
   const [submitting, setSubmitting] = useState(false);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
   const [token, setToken] = useState("");
+  const [error, setError] = useState("");
 
   useEffect(() => {
     const supabase = createClient();
@@ -46,6 +48,7 @@ export default function TrainingPage() {
     });
   }, []);
 
+  // Poll for in-progress jobs
   useEffect(() => {
     if (!token || !jobs.some((j) => j.status === "running" || j.status === "pending")) return;
     const id = setInterval(() => {
@@ -57,14 +60,28 @@ export default function TrainingPage() {
   async function startJob(e: React.FormEvent) {
     e.preventDefault();
     setSubmitting(true);
+    setError("");
     try {
       const job = await api.post<Job>("/training/jobs", { website_url: url, max_pages: maxPages }, token);
-      setJobs((prev) => [job, ...prev]);
+      setJobs(prev => [job, ...prev]);
       setUrl("");
     } catch (err: unknown) {
-      alert(err instanceof Error ? err.message : "Failed to start job");
+      setError(err instanceof Error ? err.message : "Failed to start job");
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  async function deleteJob(id: string) {
+    if (!confirm("Delete this training job record?")) return;
+    setDeletingId(id);
+    try {
+      await api.delete(`/training/jobs/${id}`, token);
+      setJobs(prev => prev.filter(j => j.id !== id));
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : "Failed to delete job");
+    } finally {
+      setDeletingId(null);
     }
   }
 
@@ -92,7 +109,7 @@ export default function TrainingPage() {
             <input
               type="url"
               value={url}
-              onChange={(e) => setUrl(e.target.value)}
+              onChange={e => setUrl(e.target.value)}
               required
               placeholder="https://yourwebsite.com"
               className="w-full border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent transition"
@@ -103,7 +120,7 @@ export default function TrainingPage() {
             <input
               type="number"
               value={maxPages}
-              onChange={(e) => setMaxPages(parseInt(e.target.value))}
+              onChange={e => setMaxPages(parseInt(e.target.value))}
               min={1}
               max={500}
               className="w-full border border-slate-200 rounded-xl px-3.5 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-brand-500 focus:border-transparent transition"
@@ -117,6 +134,9 @@ export default function TrainingPage() {
             <Play size={14} /> {submitting ? "Starting…" : "Start crawl"}
           </button>
         </form>
+        {error && (
+          <p className="mt-3 text-sm text-red-600 bg-red-50 border border-red-100 rounded-xl px-4 py-2">{error}</p>
+        )}
       </div>
 
       {/* Job list */}
@@ -132,32 +152,64 @@ export default function TrainingPage() {
               <th className="px-6 py-3 text-left font-semibold">Status</th>
               <th className="px-6 py-3 text-left font-semibold">Progress</th>
               <th className="px-6 py-3 text-left font-semibold">Started</th>
+              <th className="px-6 py-3" />
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-100">
             {jobs.length === 0 && (
-              <tr><td colSpan={4} className="px-6 py-16 text-center">
-                <FileText size={36} className="mx-auto text-slate-300 mb-3" />
-                <p className="text-slate-500 text-sm">No training jobs yet</p>
-                <p className="text-slate-400 text-xs mt-1">Start one above to crawl your first site</p>
-              </td></tr>
+              <tr>
+                <td colSpan={5} className="px-6 py-16 text-center">
+                  <FileText size={36} className="mx-auto text-slate-300 mb-3" />
+                  <p className="text-slate-500 text-sm">No training jobs yet</p>
+                  <p className="text-slate-400 text-xs mt-1">Start one above to crawl your first site</p>
+                </td>
+              </tr>
             )}
-            {jobs.map((job) => (
-              <tr key={job.id} className="hover:bg-slate-50/60 transition">
-                <td className="px-6 py-3.5 font-medium text-slate-700 truncate max-w-xs">{job.website_url}</td>
+            {jobs.map(job => (
+              <tr key={job.id} className="hover:bg-slate-50/60 transition group">
+                <td className="px-6 py-3.5 font-medium text-slate-700 max-w-xs">
+                  <span className="truncate block max-w-[200px]" title={job.website_url}>{job.website_url}</span>
+                  {job.error_message && (
+                    <span className="text-red-500 text-xs block truncate max-w-[200px]" title={job.error_message}>
+                      {job.error_message}
+                    </span>
+                  )}
+                </td>
                 <td className="px-6 py-3.5">{statusBadge(job.status)}</td>
                 <td className="px-6 py-3.5">
                   {job.pages_total > 0 ? (
                     <div>
-                      <div className="text-xs text-slate-600 mb-1">{job.pages_crawled} / {job.pages_total} pages</div>
+                      <div className="text-xs text-slate-600 mb-1">
+                        {job.pages_crawled} / {job.pages_total} pages
+                      </div>
                       <div className="w-32 h-1.5 bg-slate-100 rounded-full overflow-hidden">
-                        <div className="h-full bg-gradient-brand rounded-full transition-all"
-                          style={{ width: `${(job.pages_crawled / job.pages_total) * 100}%` }} />
+                        <div
+                          className="h-full bg-gradient-brand rounded-full transition-all"
+                          style={{ width: `${(job.pages_crawled / job.pages_total) * 100}%` }}
+                        />
                       </div>
                     </div>
-                  ) : <span className="text-slate-300">—</span>}
+                  ) : (
+                    <span className="text-slate-300">—</span>
+                  )}
                 </td>
-                <td className="px-6 py-3.5 text-slate-400 text-xs">{new Date(job.created_at).toLocaleString()}</td>
+                <td className="px-6 py-3.5 text-slate-400 text-xs">
+                  {new Date(job.created_at).toLocaleString()}
+                </td>
+                <td className="px-6 py-3.5 text-right">
+                  {job.status !== "running" && job.status !== "pending" && (
+                    <button
+                      onClick={() => deleteJob(job.id)}
+                      disabled={deletingId === job.id}
+                      className="opacity-0 group-hover:opacity-100 text-slate-400 hover:text-red-500 transition p-1.5 rounded-lg hover:bg-red-50 disabled:opacity-50"
+                      title="Delete job"
+                    >
+                      {deletingId === job.id
+                        ? <Loader2 size={14} className="animate-spin" />
+                        : <Trash2 size={14} />}
+                    </button>
+                  )}
+                </td>
               </tr>
             ))}
           </tbody>

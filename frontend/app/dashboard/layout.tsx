@@ -6,13 +6,14 @@ import { createClient } from "@/lib/supabase";
 import {
   LayoutDashboard, MessageSquare, Cpu, BarChart2, Key, LogOut, Sparkles
 } from "lucide-react";
+import DashboardAI from "./_components/DashboardAI";
 
 const nav = [
-  { href: "/dashboard", label: "Overview", icon: LayoutDashboard, exact: true },
-  { href: "/dashboard/training", label: "Training", icon: Cpu },
-  { href: "/dashboard/conversations", label: "Conversations", icon: MessageSquare },
-  { href: "/dashboard/analytics", label: "Analytics", icon: BarChart2 },
-  { href: "/dashboard/clients", label: "Install & API Keys", icon: Key },
+  { href: "/dashboard",               label: "Overview",        icon: LayoutDashboard, exact: true },
+  { href: "/dashboard/training",      label: "Training",        icon: Cpu },
+  { href: "/dashboard/conversations", label: "Conversations",   icon: MessageSquare },
+  { href: "/dashboard/analytics",     label: "Analytics",       icon: BarChart2 },
+  { href: "/dashboard/clients",       label: "Install & API Keys", icon: Key },
 ];
 
 export default function DashboardLayout({ children }: { children: React.ReactNode }) {
@@ -94,6 +95,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
       <main className="flex-1 overflow-auto">
         <div className="fade-in px-10 py-8 max-w-7xl mx-auto">{children}</div>
       </main>
+
+      {/* Floating AI assistant — available on every dashboard page */}
+      <DashboardAI />
     </div>
   );
 }

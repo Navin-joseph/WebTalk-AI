@@ -232,7 +232,7 @@ async def widget_tts(
     audio file in a single response, which the client decodes via Web Audio.
     Surfaces real errors (auth, quota, bad voice) as 502 with details.
     """
-    from ..voice.tts import ElevenLabsTTS, TTSError
+    from ..voice.tts import get_tts, TTSError
     from fastapi.responses import Response
 
     text = payload.text.strip()
@@ -244,14 +244,11 @@ async def widget_tts(
     logger.info("tts IN client=%s len=%d", client_id, len(text))
 
     try:
-        tts = ElevenLabsTTS()
+        tts = get_tts()
         audio = await tts.synthesize(text)
     except TTSError as e:
-        logger.error("tts ElevenLabs error: %s", e)
-        raise HTTPException(
-            status_code=502,
-            detail=f"ElevenLabs returned {e.status}: {e.body[:200]}",
-        )
+        logger.error("tts provider error: %s", e)
+        raise HTTPException(status_code=502, detail=str(e)[:300])
     except Exception as e:
         logger.exception("tts unexpected failure")
         raise HTTPException(status_code=500, detail=f"TTS failed: {type(e).__name__}")

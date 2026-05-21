@@ -56,6 +56,26 @@ async def get_job(
     return result.data
 
 
+@router.delete("/jobs/{job_id}")
+async def delete_job(
+    job_id: str,
+    user: TokenPayload = Depends(get_current_user),
+    db: Client = Depends(get_supabase),
+):
+    """Delete a training job record. Does not remove already-indexed vectors from Qdrant."""
+    client = db.table("clients").select("id").eq("owner_user_id", user.sub).single().execute()
+    result = (
+        db.table("training_jobs")
+        .delete()
+        .eq("id", job_id)
+        .eq("client_id", client.data["id"])
+        .execute()
+    )
+    if not result.data:
+        raise HTTPException(status_code=404, detail="Job not found")
+    return {"message": "Training job deleted"}
+
+
 async def _run_training_job(job_id: str, client_id: str, website_url: str, max_pages: int):
     from ..crawler.crawler import WebCrawler
     from ..crawler.embeddings import EmbeddingService

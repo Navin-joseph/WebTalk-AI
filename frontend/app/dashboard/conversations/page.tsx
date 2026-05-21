@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase";
 import { api } from "@/lib/api";
-import { MessageSquare, Mic, Inbox } from "lucide-react";
+import { MessageSquare, Mic, Inbox, Trash2, Loader2, X } from "lucide-react";
 
 interface Conversation {
   id: string;
@@ -16,11 +16,14 @@ export default function ConversationsPage() {
   const [convos, setConvos] = useState<Conversation[]>([]);
   const [selected, setSelected] = useState<Conversation | null>(null);
   const [loading, setLoading] = useState(true);
+  const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [token, setToken] = useState("");
 
   useEffect(() => {
     const supabase = createClient();
     supabase.auth.getSession().then(async ({ data }) => {
       if (!data.session) return;
+      setToken(data.session.access_token);
       try {
         const res = await api.get<Conversation[]>("/conversations/", data.session.access_token);
         setConvos(res);
@@ -29,6 +32,21 @@ export default function ConversationsPage() {
       }
     });
   }, []);
+
+  async function deleteConversation(id: string, e: React.MouseEvent) {
+    e.stopPropagation();
+    if (!confirm("Delete this conversation? This cannot be undone.")) return;
+    setDeletingId(id);
+    try {
+      await api.delete(`/conversations/${id}`, token);
+      setConvos(prev => prev.filter(c => c.id !== id));
+      if (selected?.id === id) setSelected(null);
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : "Failed to delete conversation");
+    } finally {
+      setDeletingId(null);
+    }
+  }
 
   return (
     <div className="space-y-6">
@@ -52,21 +70,40 @@ export default function ConversationsPage() {
                 <p className="text-sm text-slate-500">No conversations yet</p>
               </div>
             )}
-            {convos.map((c) => (
+            {convos.map(c => (
               <button
                 key={c.id}
                 onClick={() => setSelected(c)}
-                className={`w-full text-left px-4 py-3 border-b border-slate-50 hover:bg-slate-50 transition ${selected?.id === c.id ? "bg-brand-50 border-l-2 border-l-brand-500" : ""}`}
+                className={`w-full text-left px-4 py-3 border-b border-slate-50 hover:bg-slate-50 transition group relative ${
+                  selected?.id === c.id ? "bg-brand-50 border-l-2 border-l-brand-500" : ""
+                }`}
               >
                 <div className="flex items-center gap-2 mb-1">
                   {c.channel === "voice"
-                    ? <span className="flex items-center gap-1 text-[10px] bg-violet-100 text-violet-700 font-semibold px-1.5 py-0.5 rounded uppercase tracking-wide"><Mic size={10} /> Voice</span>
-                    : <span className="flex items-center gap-1 text-[10px] bg-blue-100 text-blue-700 font-semibold px-1.5 py-0.5 rounded uppercase tracking-wide"><MessageSquare size={10} /> Text</span>
-                  }
+                    ? <span className="flex items-center gap-1 text-[10px] bg-violet-100 text-violet-700 font-semibold px-1.5 py-0.5 rounded uppercase tracking-wide">
+                        <Mic size={10} /> Voice
+                      </span>
+                    : <span className="flex items-center gap-1 text-[10px] bg-blue-100 text-blue-700 font-semibold px-1.5 py-0.5 rounded uppercase tracking-wide">
+                        <MessageSquare size={10} /> Text
+                      </span>}
                   <span className="text-[10px] font-mono text-slate-400 truncate">{c.session_id.slice(0, 10)}…</span>
                 </div>
-                <p className="text-sm text-slate-700 truncate font-medium">{c.messages[0]?.content ?? "—"}</p>
+                <p className="text-sm text-slate-700 truncate font-medium pr-6">
+                  {c.messages[0]?.content ?? "—"}
+                </p>
                 <p className="text-xs text-slate-400 mt-0.5">{new Date(c.created_at).toLocaleString()}</p>
+
+                {/* Delete button — appears on hover */}
+                <button
+                  onClick={e => deleteConversation(c.id, e)}
+                  disabled={deletingId === c.id}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 opacity-0 group-hover:opacity-100 p-1.5 rounded-lg text-slate-400 hover:text-red-500 hover:bg-red-50 transition disabled:opacity-50"
+                  title="Delete conversation"
+                >
+                  {deletingId === c.id
+                    ? <Loader2 size={13} className="animate-spin" />
+                    : <Trash2 size={13} />}
+                </button>
               </button>
             ))}
           </div>
@@ -83,14 +120,27 @@ export default function ConversationsPage() {
             </div>
           ) : (
             <>
-              <div className="px-6 py-4 border-b border-slate-100">
-                <div className="flex items-center gap-2 mb-1">
-                  {selected.channel === "voice"
-                    ? <Mic size={14} className="text-violet-500" />
-                    : <MessageSquare size={14} className="text-blue-500" />}
-                  <p className="text-sm font-semibold text-slate-700 capitalize">{selected.channel} session</p>
+              <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
+                <div>
+                  <div className="flex items-center gap-2 mb-1">
+                    {selected.channel === "voice"
+                      ? <Mic size={14} className="text-violet-500" />
+                      : <MessageSquare size={14} className="text-blue-500" />}
+                    <p className="text-sm font-semibold text-slate-700 capitalize">
+                      {selected.channel} session
+                    </p>
+                  </div>
+                  <p className="text-xs text-slate-400 font-mono">{selected.session_id}</p>
                 </div>
-                <p className="text-xs text-slate-400 font-mono">{selected.session_id}</p>
+                <button
+                  onClick={e => deleteConversation(selected.id, e)}
+                  disabled={deletingId === selected.id}
+                  className="flex items-center gap-1.5 text-xs text-slate-400 hover:text-red-500 hover:bg-red-50 px-2.5 py-1.5 rounded-lg border border-slate-200 hover:border-red-200 transition disabled:opacity-50"
+                >
+                  {deletingId === selected.id
+                    ? <><Loader2 size={12} className="animate-spin" /> Deleting…</>
+                    : <><Trash2 size={12} /> Delete</>}
+                </button>
               </div>
               <div className="flex-1 overflow-y-auto p-6 space-y-3">
                 {selected.messages.map((m, i) => (

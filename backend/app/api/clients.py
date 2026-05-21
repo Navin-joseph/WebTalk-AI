@@ -14,14 +14,12 @@ async def get_my_client(
     user: TokenPayload = Depends(get_current_user),
     db: Client = Depends(get_supabase),
 ):
-    # Try to fetch existing client record
     result = db.table("clients").select("*").eq("owner_user_id", user.sub).execute()
 
     if result.data:
         return result.data[0]
 
-    # Auto-create on first access (handles users who signed up via Supabase auth
-    # directly, or whose client row failed to create during registration)
+    # Auto-create on first access
     auth_user = db.auth.admin.get_user_by_id(user.sub)
     email = auth_user.user.email if auth_user and auth_user.user else ""
     name = (auth_user.user.user_metadata or {}).get("name", email.split("@")[0]) if auth_user and auth_user.user else "Untitled"
@@ -57,7 +55,14 @@ async def list_api_keys(
     db: Client = Depends(get_supabase),
 ):
     client = db.table("clients").select("id").eq("owner_user_id", user.sub).single().execute()
-    result = db.table("api_keys").select("*").eq("client_id", client.data["id"]).execute()
+    result = (
+        db.table("api_keys")
+        .select("*")
+        .eq("client_id", client.data["id"])
+        .eq("is_active", True)   # Only return active (non-deleted) keys
+        .order("created_at", desc=True)
+        .execute()
+    )
     return result.data
 
 
@@ -80,16 +85,23 @@ async def create_api_key(
         "key_prefix": raw_key[:8],
     }).execute()
 
-    # Return raw key ONCE — not stored
     return {"key": raw_key, "prefix": raw_key[:8], "name": payload.name}
 
 
 @router.delete("/me/api-keys/{key_id}")
-async def revoke_api_key(
+async def delete_api_key(
     key_id: str,
     user: TokenPayload = Depends(get_current_user),
     db: Client = Depends(get_supabase),
 ):
     client = db.table("clients").select("id").eq("owner_user_id", user.sub).single().execute()
-    db.table("api_keys").update({"is_active": False}).eq("id", key_id).eq("client_id", client.data["id"]).execute()
-    return {"message": "API key revoked"}
+    result = (
+        db.table("api_keys")
+        .delete()
+        .eq("id", key_id)
+        .eq("client_id", client.data["id"])
+        .execute()
+    )
+    if not result.data:
+        raise HTTPException(status_code=404, detail="API key not found")
+    return {"message": "API key deleted"}
