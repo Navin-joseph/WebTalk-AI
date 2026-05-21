@@ -184,30 +184,41 @@ async def widget_chat_stream(
     client: dict = Depends(get_client_from_api_key),
     db: Client = Depends(get_supabase),
 ):
-    """SSE streaming (kept for future — Render currently buffers, so widget uses /chat)."""
+    """SSE streaming chat for the embedded widget. Authenticated via X-API-Key header."""
     from ..rag.pipeline import RAGPipeline
 
     client_id = str(client["id"])
-    company_name = client.get("name", "this site")
+    company_name = client.get("name") or "this site"
+    session_id = payload.session_id
     rag = RAGPipeline()
-    logger.info("chat/stream IN client=%s", client_id)
+    logger.info("widget stream IN client=%s session=%s", client_id, session_id)
 
     async def event_generator():
         full_answer = ""
         try:
             async for event in rag.stream_query(
-                client_id=client_id, question=payload.message,
-                session_id=payload.session_id, company_name=company_name,
+                client_id=client_id,
+                question=payload.message,
+                session_id=session_id,
+                company_name=company_name,
             ):
                 if event["type"] == "done":
                     full_answer = event["answer"]
                 yield f"data: {json.dumps(event)}\n\n"
+
             if full_answer:
-                _upsert_conversation(db, client_id, payload.session_id, payload.message, full_answer, "text")
-            yield "data: [DONE]\n\n"
+                try:
+                    _upsert_conversation(db, client_id, session_id, payload.message, full_answer, "text")
+                except Exception:
+                    logger.exception("widget stream: conversation persist failed (non-fatal)")
+
         except Exception as e:
-            logger.exception("chat/stream FAIL")
-            yield f"data: {json.dumps({'type': 'error', 'message': str(e)})}\n\n"
+            logger.exception("widget stream FAIL client=%s", client_id)
+            err_msg = "I'm having trouble right now. Please try again."
+            yield f"data: {json.dumps({'type': 'token', 'text': err_msg})}\n\n"
+            yield f"data: {json.dumps({'type': 'done', 'answer': err_msg})}\n\n"
+        finally:
+            yield "data: [DONE]\n\n"
 
     return StreamingResponse(
         event_generator(),
