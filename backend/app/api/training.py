@@ -56,6 +56,23 @@ async def get_job(
     return result.data
 
 
+@router.delete("/data")
+async def clear_training_data(
+    user: TokenPayload = Depends(get_current_user),
+    db: Client = Depends(get_supabase),
+):
+    """Delete all indexed vectors from Qdrant for this client (clean slate for retraining)."""
+    from ..rag.vector_store import VectorStore
+    client = db.table("clients").select("id").eq("owner_user_id", user.sub).single().execute()
+    client_id = str(client.data["id"])
+    try:
+        vs = VectorStore()
+        await vs.delete_collection(client_id)
+    except Exception:
+        pass  # collection may not exist yet — that's fine
+    return {"message": "Knowledge base cleared"}
+
+
 @router.delete("/jobs/{job_id}")
 async def delete_job(
     job_id: str,

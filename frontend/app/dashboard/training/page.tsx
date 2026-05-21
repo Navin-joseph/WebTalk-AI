@@ -2,7 +2,7 @@
 import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase";
 import { api } from "@/lib/api";
-import { Loader2, CheckCircle2, XCircle, Clock, Globe, Play, FileText, Trash2 } from "lucide-react";
+import { Loader2, CheckCircle2, XCircle, Clock, Globe, Play, FileText, Trash2, DatabaseZap } from "lucide-react";
 
 interface Job {
   id: string;
@@ -36,6 +36,7 @@ export default function TrainingPage() {
   const [maxPages, setMaxPages] = useState(50);
   const [submitting, setSubmitting] = useState(false);
   const [deletingId, setDeletingId] = useState<string | null>(null);
+  const [clearing, setClearing] = useState(false);
   const [token, setToken] = useState("");
   const [error, setError] = useState("");
 
@@ -69,6 +70,19 @@ export default function TrainingPage() {
       setError(err instanceof Error ? err.message : "Failed to start job");
     } finally {
       setSubmitting(false);
+    }
+  }
+
+  async function clearData() {
+    if (!confirm("This will delete ALL knowledge base vectors for your AI agent. The agent will not know anything until you run a new training job. Continue?")) return;
+    setClearing(true);
+    try {
+      await api.delete("/training/data", token);
+      alert("Knowledge base cleared. Run a new training job to re-train your agent.");
+    } catch (err: unknown) {
+      alert(err instanceof Error ? err.message : "Failed to clear knowledge base");
+    } finally {
+      setClearing(false);
     }
   }
 
@@ -143,7 +157,18 @@ export default function TrainingPage() {
       <div className="bg-white rounded-2xl border border-slate-200/70 overflow-hidden shadow-soft">
         <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
           <h2 className="font-semibold text-slate-900">Job history</h2>
-          <span className="text-xs text-slate-400">{jobs.length} total</span>
+          <div className="flex items-center gap-3">
+            <span className="text-xs text-slate-400">{jobs.length} total</span>
+            <button
+              onClick={clearData}
+              disabled={clearing}
+              className="flex items-center gap-1.5 text-xs text-red-500 hover:text-red-700 hover:bg-red-50 px-2.5 py-1.5 rounded-lg border border-red-200 hover:border-red-300 transition disabled:opacity-50"
+              title="Delete all knowledge base vectors and start fresh"
+            >
+              {clearing ? <Loader2 size={12} className="animate-spin" /> : <DatabaseZap size={12} />}
+              {clearing ? "Clearing…" : "Clear knowledge base"}
+            </button>
+          </div>
         </div>
         <table className="w-full text-sm">
           <thead className="bg-slate-50 text-slate-500 text-xs uppercase tracking-wider">
