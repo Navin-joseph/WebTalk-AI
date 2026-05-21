@@ -26,6 +26,8 @@ export default function DashboardAI() {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const recognitionRef = useRef<any>(null);
   const abortRef = useRef<AbortController | null>(null);
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const audioUrlRef = useRef<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -47,16 +49,41 @@ export default function DashboardAI() {
     }
   }, [open, messages]);
 
-  const speak = useCallback((text: string) => {
-    if (!ttsEnabled || typeof window === "undefined" || !window.speechSynthesis) return;
-    window.speechSynthesis.cancel();
-    const utterance = new SpeechSynthesisUtterance(text.slice(0, 500));
-    utterance.rate = 1.05;
-    utterance.onstart = () => setSpeaking(true);
-    utterance.onend = () => setSpeaking(false);
-    utterance.onerror = () => setSpeaking(false);
-    window.speechSynthesis.speak(utterance);
-  }, [ttsEnabled]);
+  const stopSpeakingAudio = useCallback(() => {
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current = null;
+    }
+    if (audioUrlRef.current) {
+      URL.revokeObjectURL(audioUrlRef.current);
+      audioUrlRef.current = null;
+    }
+    setSpeaking(false);
+  }, []);
+
+  const speak = useCallback(async (text: string) => {
+    if (!ttsEnabled || !token) return;
+    stopSpeakingAudio();
+    try {
+      const res = await fetch(`${API_URL}/api/v1/conversations/tts`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ text: text.slice(0, 500) }),
+      });
+      if (!res.ok) return;
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      audioUrlRef.current = url;
+      const audio = new Audio(url);
+      audioRef.current = audio;
+      audio.onplay  = () => setSpeaking(true);
+      audio.onended = () => { setSpeaking(false); URL.revokeObjectURL(url); audioRef.current = null; audioUrlRef.current = null; };
+      audio.onerror = () => { setSpeaking(false); };
+      await audio.play();
+    } catch {
+      setSpeaking(false);
+    }
+  }, [ttsEnabled, token, stopSpeakingAudio]);
 
   const sendMessage = useCallback(async (text: string) => {
     if (!text.trim() || !token || streaming) return;
@@ -169,8 +196,7 @@ export default function DashboardAI() {
   }
 
   function stopSpeaking() {
-    window.speechSynthesis?.cancel();
-    setSpeaking(false);
+    stopSpeakingAudio();
   }
 
   function clearChat() {

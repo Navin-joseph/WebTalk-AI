@@ -260,6 +260,38 @@ async def assistant_stream(
     )
 
 
+class _TTSRequest(BaseModel):
+    text: str
+
+
+@router.post("/tts")
+async def dashboard_tts(
+    payload: _TTSRequest,
+    user: TokenPayload = Depends(get_current_user),
+):
+    """TTS for the Dashboard AI — JWT auth, returns MP3 bytes via configured provider."""
+    from ..voice.tts import get_tts, TTSError
+    from fastapi.responses import Response
+
+    text = payload.text.strip()[:500]
+    if not text:
+        raise HTTPException(status_code=400, detail="Text required")
+
+    try:
+        tts = get_tts()
+        audio = await tts.synthesize(text)
+    except TTSError as e:
+        raise HTTPException(status_code=502, detail=str(e)[:300])
+    except Exception:
+        raise HTTPException(status_code=500, detail="TTS failed")
+
+    return Response(
+        content=audio,
+        media_type="audio/mpeg",
+        headers={"Cache-Control": "no-store", "Content-Length": str(len(audio))},
+    )
+
+
 def _upsert_conversation(db: Client, client_id: str, session_id: str, user_msg: str, ai_msg: str):
     existing = db.table("conversations").select("id, messages").eq("client_id", client_id).eq("session_id", session_id).execute()
 

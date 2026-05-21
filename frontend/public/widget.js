@@ -15,7 +15,7 @@
   let msgs = [], streaming = false, listening = false, speaking = false;
   let ttsOn = true, panelOpen = false, sessionId;
   let msgsEl, inputEl, sendBtn, micBtn, statusEl, avatarEl, muteBtn;
-  let recognition = null;
+  let recognition = null, currentAudio = null, currentAudioUrl = null;
 
   // ── Helpers ─────────────────────────────────────────────────────────────────
   function esc(s) {
@@ -349,36 +349,38 @@
     }
   }
 
-  // ── Browser TTS (speechSynthesis) ────────────────────────────────────────────
-  function speakText(text) {
-    if (!window.speechSynthesis) return;
-    window.speechSynthesis.cancel();
-    const utt = new SpeechSynthesisUtterance(text.slice(0, 500));
-    utt.rate = 1.05;
-    utt.onstart = () => { speaking = true; setStatus("Speaking…"); setActive(true); };
-    utt.onend   = () => { speaking = false; setStatus("Ask about this site"); setActive(false); };
-    utt.onerror = () => { speaking = false; setStatus("Ask about this site"); setActive(false); };
-
-    function doSpeak() {
-      const voices = window.speechSynthesis.getVoices();
-      const pref = voices.find(v => /Google US English|Samantha|Karen|Daniel/i.test(v.name))
-                || voices.find(v => v.lang?.startsWith("en"));
-      if (pref) utt.voice = pref;
-      window.speechSynthesis.speak(utt);
-    }
-
-    // getVoices() may return [] on first call — wait for voiceschanged if so
-    const voices = window.speechSynthesis.getVoices();
-    if (voices.length > 0) {
-      doSpeak();
-    } else {
-      window.speechSynthesis.addEventListener("voiceschanged", doSpeak, { once: true });
-      window.speechSynthesis.speak(utt); // also try immediately as fallback
+  // ── Cartesia TTS via backend ─────────────────────────────────────────────────
+  async function speakText(text) {
+    if (!ttsOn) return;
+    stopSpeaking();
+    try {
+      const res = await fetch(`${cfg.apiUrl}/api/v1/widget/tts`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-API-Key": cfg.apiKey },
+        body: JSON.stringify({ text: text.slice(0, 500) }),
+      });
+      if (!res.ok) return;
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      currentAudioUrl = url;
+      currentAudio = new Audio(url);
+      currentAudio.onplay  = () => { speaking = true; setStatus("Speaking…"); setActive(true); };
+      currentAudio.onended = () => {
+        speaking = false; setStatus("Ask about this site"); setActive(false);
+        URL.revokeObjectURL(url); currentAudio = null; currentAudioUrl = null;
+      };
+      currentAudio.onerror = () => {
+        speaking = false; setStatus("Ask about this site"); setActive(false);
+      };
+      await currentAudio.play();
+    } catch {
+      speaking = false; setStatus("Ask about this site"); setActive(false);
     }
   }
 
   function stopSpeaking() {
-    window.speechSynthesis?.cancel();
+    if (currentAudio) { currentAudio.pause(); currentAudio = null; }
+    if (currentAudioUrl) { URL.revokeObjectURL(currentAudioUrl); currentAudioUrl = null; }
     speaking = false;
     setStatus("Ask about this site");
     setActive(false);
