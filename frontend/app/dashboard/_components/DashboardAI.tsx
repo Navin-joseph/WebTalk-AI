@@ -1,7 +1,7 @@
 "use client";
 import { useState, useEffect, useRef, useCallback } from "react";
 import { createClient } from "@/lib/supabase";
-import { Mic, MicOff, X, Send, Loader2, Volume2, VolumeX, RotateCcw, MessageSquare } from "lucide-react";
+import { Mic, MicOff, X, Send, Volume2, VolumeX, RotateCcw, MessageSquare } from "lucide-react";
 // Avatar photo — place your photo at frontend/public/avatar.jpg
 
 interface Message {
