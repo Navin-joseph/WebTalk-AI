@@ -206,7 +206,7 @@ export default function DashboardAI() {
     recognition.onstart = () => setListening(true);
     recognition.onend = () => setListening(false);
     recognition.onerror = () => setListening(false);
-    recognition.onresult = (e: SpeechRecognitionEvent) => {
+    recognition.onresult = (e: { results: { [key: number]: { [key: number]: { transcript: string } } } }) => {
       const transcript = e.results[0]?.[0]?.transcript;
       if (transcript) sendMessage(transcript);
     };
