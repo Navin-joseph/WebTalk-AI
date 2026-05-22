@@ -12,32 +12,42 @@ interface Message {
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
 export default function DashboardAI() {
-  const [open, setOpen] = useState(false);
-  const [messages, setMessages] = useState<Message[]>([]);
-  const [input, setInput] = useState("");
+  const [open, setOpen]           = useState(false);
+  const [messages, setMessages]   = useState<Message[]>([]);
+  const [input, setInput]         = useState("");
   const [streaming, setStreaming] = useState(false);
   const [listening, setListening] = useState(false);
-  const [speaking, setSpeaking] = useState(false);
-  const [token, setToken] = useState("");
+  const [speaking, setSpeaking]   = useState(false);
+  const [token, setToken]         = useState("");
   const [ttsEnabled, setTtsEnabled] = useState(true);
 
-  const sessionId = useRef(`dash_${Date.now()}_${Math.random().toString(36).slice(2)}`);
+  const sessionId     = useRef(`dash_${Date.now()}_${Math.random().toString(36).slice(2)}`);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const recognitionRef = useRef<any>(null);
-  const abortRef = useRef<AbortController | null>(null);
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-  const audioUrlRef = useRef<string | null>(null);
-  const ttsAbortRef = useRef(false);   // set true to cancel mid-queue
-  const inputRef = useRef<HTMLInputElement>(null);
+  const abortRef      = useRef<AbortController | null>(null);
+  const inputRef      = useRef<HTMLInputElement>(null);
+
+  // ── TTS refs (never stale inside async callbacks) ────────────────────────
+  const audioRef       = useRef<HTMLAudioElement | null>(null);
+  const audioUrlRef    = useRef<string | null>(null);
+  const ttsAbortRef    = useRef(false);
+  const ttsQRef        = useRef<string[]>([]);
+  const ttsRunRef      = useRef(false);
+  const ttsPendingRef  = useRef("");   // accumulates partial sentence during streaming
+
+  // ── Sync token/ttsEnabled into refs so async callbacks always see latest ─
+  const tokenRef      = useRef(token);
+  const ttsEnabledRef = useRef(ttsEnabled);
+  useEffect(() => { tokenRef.current = token; }, [token]);
+  useEffect(() => { ttsEnabledRef.current = ttsEnabled; }, [ttsEnabled]);
 
   useEffect(() => {
     const supabase = createClient();
     supabase.auth.getSession().then(({ data }) => {
       if (data.session) setToken(data.session.access_token);
     });
-    // Refresh token before it expires
-    const { data: { subscription } } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((_e, session) => {
       if (session) setToken(session.access_token);
     });
     return () => subscription.unsubscribe();
@@ -50,62 +60,92 @@ export default function DashboardAI() {
     }
   }, [open, messages]);
 
-  const stopSpeakingAudio = useCallback(() => {
+  // ── TTS helpers ───────────────────────────────────────────────────────────
+
+  /** Fetch one TTS chunk → blob URL (null on failure/abort) */
+  const fetchAudioUrl = useCallback(async (text: string): Promise<string | null> => {
+    const tok = tokenRef.current;
+    if (!text.trim() || !tok || ttsAbortRef.current) return null;
+    try {
+      const r = await fetch(`${API_URL}/api/v1/conversations/tts`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${tok}` },
+        body: JSON.stringify({ text }),
+      });
+      if (!r.ok || ttsAbortRef.current) return null;
+      return URL.createObjectURL(await r.blob());
+    } catch { return null; }
+  }, []);
+
+  /** Stop all TTS immediately */
+  const stopTTS = useCallback(() => {
     ttsAbortRef.current = true;
-    if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; }
+    ttsQRef.current     = [];
+    ttsRunRef.current   = false;
+    ttsPendingRef.current = "";
+    if (audioRef.current)  { audioRef.current.pause(); audioRef.current = null; }
     if (audioUrlRef.current) { URL.revokeObjectURL(audioUrlRef.current); audioUrlRef.current = null; }
     setSpeaking(false);
   }, []);
 
-  // Split text into sentence-sized chunks so Cartesia processes short pieces fast.
-  // First sentence audio starts playing ~3× sooner than sending the whole block.
-  const speak = useCallback(async (text: string) => {
-    if (!ttsEnabled || !token) return;
-    stopSpeakingAudio();
+  /**
+   * Drain the TTS queue with pre-fetching:
+   * while chunk N is playing, chunk N+1 is already being fetched → zero gap.
+   */
+  const drainTTS = useCallback(async () => {
+    if (ttsRunRef.current) return;
+    ttsRunRef.current = true;
+
+    let prefetch: Promise<string | null> | null = null;
+
+    while (ttsQRef.current.length > 0 && !ttsAbortRef.current) {
+      const text = ttsQRef.current.shift()!;
+      const url  = await (prefetch || fetchAudioUrl(text));
+      prefetch   = null;
+      if (!url || ttsAbortRef.current) continue;
+
+      // Kick off next fetch in parallel with playback
+      if (ttsQRef.current.length > 0 && !ttsAbortRef.current) {
+        prefetch = fetchAudioUrl(ttsQRef.current[0]);
+      }
+
+      setSpeaking(true);
+      audioRef.current    = new Audio(url);
+      audioUrlRef.current = url;
+      await new Promise<void>(resolve => {
+        audioRef.current!.onended = () => {
+          URL.revokeObjectURL(url);
+          audioRef.current    = null;
+          audioUrlRef.current = null;
+          resolve();
+        };
+        audioRef.current!.onerror = () => resolve();
+        audioRef.current!.play().catch(resolve);
+      });
+    }
+
+    if (prefetch) prefetch.then(u => u && URL.revokeObjectURL(u)).catch(() => {});
+    ttsRunRef.current = false;
+    if (ttsQRef.current.length === 0) setSpeaking(false);
+  }, [fetchAudioUrl]);
+
+  /** Add a chunk to the TTS queue and start drain */
+  const enqueueTTS = useCallback((text: string) => {
+    if (!ttsEnabledRef.current || !text.trim()) return;
     ttsAbortRef.current = false;
+    ttsQRef.current.push(text.trim());
+    drainTTS();
+  }, [drainTTS]);
 
-    // Split on sentence boundaries; keep any trailing fragment as last chunk
-    const sentenceRe = /([\s\S]+?[.!?])(?=\s|$)/g;
-    const chunks: string[] = [];
-    let last = 0;
-    let m: RegExpExecArray | null;
-    while ((m = sentenceRe.exec(text)) !== null) {
-      chunks.push(m[1].trim());
-      last = m.index + m[0].length;
-    }
-    const tail = text.slice(last).trim();
-    if (tail) chunks.push(tail);
-    if (!chunks.length) chunks.push(text.trim());
-
-    for (const chunk of chunks) {
-      if (ttsAbortRef.current || !ttsEnabled || !chunk) break;
-      try {
-        const res = await fetch(`${API_URL}/api/v1/conversations/tts`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-          body: JSON.stringify({ text: chunk }),
-        });
-        if (!res.ok || ttsAbortRef.current) break;
-        const blob = await res.blob();
-        if (ttsAbortRef.current) break;
-        const url = URL.createObjectURL(blob);
-        audioUrlRef.current = url;
-        const audio = new Audio(url);
-        audioRef.current = audio;
-        setSpeaking(true);
-        await new Promise<void>(resolve => {
-          audio.onended = () => { URL.revokeObjectURL(url); audioRef.current = null; audioUrlRef.current = null; resolve(); };
-          audio.onerror = () => resolve();
-          audio.play().catch(resolve);
-        });
-      } catch { break; }
-    }
-
-    if (!ttsAbortRef.current) setSpeaking(false);
-  }, [ttsEnabled, token, stopSpeakingAudio]);
+  // ── Chat ──────────────────────────────────────────────────────────────────
 
   const sendMessage = useCallback(async (text: string) => {
     if (!text.trim() || !token || streaming) return;
+
+    // Stop any ongoing TTS, reset accumulator
+    stopTTS();
+    ttsAbortRef.current = false;
+    ttsPendingRef.current = "";
 
     setMessages(prev => [
       ...prev,
@@ -118,26 +158,18 @@ export default function DashboardAI() {
     abortRef.current?.abort();
     abortRef.current = new AbortController();
     let fullAnswer = "";
-
-    // Build history from current messages (exclude the placeholder we just added)
     const history = messages.map(m => ({ role: m.role, content: m.content }));
 
     try {
       const res = await fetch(`${API_URL}/api/v1/conversations/assistant/stream`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${token}`,
-        },
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
         body: JSON.stringify({ message: text, session_id: sessionId.current, history }),
         signal: abortRef.current.signal,
       });
+      if (!res.ok || !res.body) throw new Error(`HTTP ${res.status}`);
 
-      if (!res.ok || !res.body) {
-        throw new Error(`HTTP ${res.status}`);
-      }
-
-      const reader = res.body.getReader();
+      const reader  = res.body.getReader();
       const decoder = new TextDecoder();
       let buf = "";
 
@@ -154,13 +186,29 @@ export default function DashboardAI() {
           if (raw === "[DONE]") break;
           try {
             const evt = JSON.parse(raw);
-            if (evt.type === "token") {
-              fullAnswer += evt.text;
+            if (evt.type === "token" && evt.text) {
+              fullAnswer            += evt.text;
+              ttsPendingRef.current += evt.text;
               setMessages(prev => {
                 const next = [...prev];
                 next[next.length - 1] = { role: "assistant", content: fullAnswer, streaming: true };
                 return next;
               });
+
+              // ── Sentence detection: enqueue complete sentences immediately ──
+              let m: RegExpMatchArray | null;
+              while ((m = /^([\s\S]{8,}?[.!?])\s+/.exec(ttsPendingRef.current)) !== null) {
+                enqueueTTS(m[1]);
+                ttsPendingRef.current = ttsPendingRef.current.slice(m[0].length);
+              }
+              // Flush at word boundary if pending is very long (no punctuation)
+              if (ttsPendingRef.current.length > 80) {
+                const cut = ttsPendingRef.current.lastIndexOf(" ", 70);
+                if (cut > 20) {
+                  enqueueTTS(ttsPendingRef.current.slice(0, cut));
+                  ttsPendingRef.current = ttsPendingRef.current.slice(cut + 1);
+                }
+              }
             } else if (evt.type === "done") {
               fullAnswer = evt.answer || fullAnswer;
             }
@@ -178,9 +226,13 @@ export default function DashboardAI() {
         return next;
       });
       setStreaming(false);
-      speak(final);
+      // Flush any remaining sentence fragment
+      if (ttsPendingRef.current.trim()) {
+        enqueueTTS(ttsPendingRef.current.trim());
+        ttsPendingRef.current = "";
+      }
     }
-  }, [token, streaming, speak, messages]);
+  }, [token, streaming, messages, stopTTS, enqueueTTS]);
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -188,24 +240,18 @@ export default function DashboardAI() {
   }
 
   function startVoice() {
-    if (listening) {
-      recognitionRef.current?.stop();
-      return;
-    }
+    if (listening) { recognitionRef.current?.stop(); return; }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const w = window as any;
     const SR = w.SpeechRecognition ?? w.webkitSpeechRecognition;
-    if (!SR) {
-      alert("Speech recognition is not supported in this browser. Try Chrome or Edge.");
-      return;
-    }
+    if (!SR) { alert("Speech recognition is not supported. Try Chrome or Edge."); return; }
     const recognition = new SR();
-    recognition.continuous = false;
+    recognition.continuous     = false;
     recognition.interimResults = false;
-    recognition.lang = "en-US";
-    recognition.onstart = () => setListening(true);
-    recognition.onend = () => setListening(false);
-    recognition.onerror = () => setListening(false);
+    recognition.lang           = "en-US";
+    recognition.onstart  = () => setListening(true);
+    recognition.onend    = () => setListening(false);
+    recognition.onerror  = () => setListening(false);
     recognition.onresult = (e: { results: { [key: number]: { [key: number]: { transcript: string } } } }) => {
       const transcript = e.results[0]?.[0]?.transcript;
       if (transcript) sendMessage(transcript);
@@ -214,12 +260,9 @@ export default function DashboardAI() {
     recognition.start();
   }
 
-  function stopSpeaking() {
-    stopSpeakingAudio();
-  }
-
   function clearChat() {
     abortRef.current?.abort();
+    stopTTS();
     setMessages([]);
     sessionId.current = `dash_${Date.now()}_${Math.random().toString(36).slice(2)}`;
     setStreaming(false);
@@ -233,77 +276,48 @@ export default function DashboardAI() {
       {open && (
         <div
           className="pointer-events-auto w-[380px] rounded-3xl shadow-2xl border border-white/60 flex flex-col overflow-hidden"
-          style={{
-            height: 580,
-            background: "rgba(255,255,255,0.97)",
-            backdropFilter: "blur(24px)",
-            WebkitBackdropFilter: "blur(24px)",
-          }}
+          style={{ height: 580, background: "rgba(255,255,255,0.97)", backdropFilter: "blur(24px)", WebkitBackdropFilter: "blur(24px)" }}
         >
           {/* Header */}
           <div
             className="px-4 py-3.5 flex items-center gap-3 border-b border-slate-100/80 flex-shrink-0"
             style={{ background: "linear-gradient(135deg,rgba(109,40,217,.07),rgba(139,92,246,.07))" }}
           >
-            {/* Orb */}
             <div
-              className={`w-9 h-9 rounded-xl flex-shrink-0 flex items-center justify-center transition-all duration-300 ${
-                isActive
-                  ? "shadow-lg shadow-violet-300"
-                  : ""
-              }`}
+              className="w-9 h-9 rounded-xl flex-shrink-0 flex items-center justify-center transition-all duration-300"
               style={{
-                background: isActive
-                  ? "linear-gradient(135deg,#7c3aed,#a855f7)"
-                  : "linear-gradient(135deg,#8b5cf6,#7c3aed)",
+                background: "linear-gradient(135deg,#7c3aed,#a855f7)",
+                boxShadow: isActive ? "0 0 0 3px rgba(124,58,237,.3)" : "none",
                 animation: isActive ? "pulse 1.5s ease-in-out infinite" : "none",
               }}
             >
               <Bot size={16} className="text-white" />
             </div>
-
             <div className="flex-1 min-w-0">
-              <p className="text-sm font-semibold text-slate-800 leading-none mb-0.5">
-                Dashboard Assistant
-              </p>
+              <p className="text-sm font-semibold text-slate-800 leading-none mb-0.5">Dashboard Assistant</p>
               <p className="text-[11px] text-slate-400 leading-none">
-                {listening ? "🎙 Listening…"
-                  : speaking  ? "🔊 Speaking…"
-                  : streaming ? "Thinking…"
-                  : "Ask about your AI agent"}
+                {listening ? "🎙 Listening…" : speaking ? "🔊 Speaking…" : streaming ? "Thinking…" : "Ask about your AI agent"}
               </p>
             </div>
-
             <div className="flex items-center gap-1">
               {speaking && (
-                <button
-                  onClick={stopSpeaking}
-                  title="Stop speaking"
-                  className="p-1.5 rounded-lg text-violet-500 hover:bg-violet-50 transition"
-                >
+                <button onClick={stopTTS} title="Stop speaking" className="p-1.5 rounded-lg text-violet-500 hover:bg-violet-50 transition">
                   <VolumeX size={14} />
                 </button>
               )}
               <button
-                onClick={() => setTtsEnabled(v => !v)}
+                onClick={() => { setTtsEnabled(v => !v); if (speaking) stopTTS(); }}
                 title={ttsEnabled ? "Mute voice" : "Unmute voice"}
                 className={`p-1.5 rounded-lg transition ${ttsEnabled ? "text-slate-400 hover:text-violet-500 hover:bg-violet-50" : "text-slate-300 hover:text-slate-500 hover:bg-slate-50"}`}
               >
                 {ttsEnabled ? <Volume2 size={14} /> : <VolumeX size={14} />}
               </button>
               {messages.length > 0 && (
-                <button
-                  onClick={clearChat}
-                  title="Clear chat"
-                  className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition"
-                >
+                <button onClick={clearChat} title="Clear chat" className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100 transition">
                   <RotateCcw size={13} />
                 </button>
               )}
-              <button
-                onClick={() => setOpen(false)}
-                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition"
-              >
+              <button onClick={() => setOpen(false)} className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-100 transition">
                 <X size={15} />
               </button>
             </div>
@@ -314,65 +328,31 @@ export default function DashboardAI() {
             {messages.length === 0 && (
               <div className="h-full flex items-center justify-center">
                 <div className="text-center px-6">
-                  <div
-                    className="w-16 h-16 rounded-2xl mx-auto mb-4 flex items-center justify-center"
-                    style={{ background: "linear-gradient(135deg,#ede9fe,#ddd6fe)" }}
-                  >
+                  <div className="w-16 h-16 rounded-2xl mx-auto mb-4 flex items-center justify-center" style={{ background: "linear-gradient(135deg,#ede9fe,#ddd6fe)" }}>
                     <Bot size={28} className="text-violet-500" />
                   </div>
-                  <p className="text-sm font-semibold text-slate-700 mb-1">
-                    Your AI Agent Assistant
-                  </p>
-                  <p className="text-xs text-slate-400 leading-relaxed">
-                    Ask about training status, conversation quality, API setup, or how to improve your agent.
-                  </p>
+                  <p className="text-sm font-semibold text-slate-700 mb-1">Your AI Agent Assistant</p>
+                  <p className="text-xs text-slate-400 leading-relaxed">Ask about training status, conversation quality, API setup, or how to improve your agent.</p>
                   <div className="mt-4 flex flex-col gap-2">
-                    {[
-                      "How do I train my AI on a new site?",
-                      "Why isn't my widget responding?",
-                      "How do I embed the widget?",
-                    ].map((q) => (
-                      <button
-                        key={q}
-                        onClick={() => sendMessage(q)}
-                        className="text-xs text-left px-3 py-2 rounded-xl bg-slate-50 hover:bg-violet-50 hover:text-violet-700 text-slate-500 border border-slate-100 hover:border-violet-200 transition"
-                      >
-                        {q}
-                      </button>
+                    {["How do I train my AI on a new site?", "Why isn't my widget responding?", "How do I embed the widget?"].map(q => (
+                      <button key={q} onClick={() => sendMessage(q)} className="text-xs text-left px-3 py-2 rounded-xl bg-slate-50 hover:bg-violet-50 hover:text-violet-700 text-slate-500 border border-slate-100 hover:border-violet-200 transition">{q}</button>
                     ))}
                   </div>
                 </div>
               </div>
             )}
-
             {messages.map((m, i) => (
               <div key={i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
                 <div
-                  className={`max-w-[86%] px-3.5 py-2.5 rounded-2xl text-sm leading-relaxed ${
-                    m.role === "user"
-                      ? "text-white rounded-br-sm"
-                      : "bg-slate-100 text-slate-700 rounded-bl-sm"
-                  }`}
-                  style={
-                    m.role === "user"
-                      ? { background: "linear-gradient(135deg,#7c3aed,#a855f7)" }
-                      : {}
-                  }
+                  className={`max-w-[86%] px-3.5 py-2.5 rounded-2xl text-sm leading-relaxed ${m.role === "user" ? "text-white rounded-br-sm" : "bg-slate-100 text-slate-700 rounded-bl-sm"}`}
+                  style={m.role === "user" ? { background: "linear-gradient(135deg,#7c3aed,#a855f7)" } : {}}
                 >
                   {m.content || (m.streaming && (
                     <span className="flex gap-1 items-center h-4 py-0.5">
-                      {[0, 150, 300].map(d => (
-                        <span
-                          key={d}
-                          className="w-1.5 h-1.5 rounded-full bg-slate-400 animate-bounce"
-                          style={{ animationDelay: `${d}ms` }}
-                        />
-                      ))}
+                      {[0, 150, 300].map(d => <span key={d} className="w-1.5 h-1.5 rounded-full bg-slate-400 animate-bounce" style={{ animationDelay: `${d}ms` }} />)}
                     </span>
                   ))}
-                  {m.streaming && m.content && (
-                    <span className="inline-block w-0.5 h-3.5 bg-slate-400 ml-0.5 animate-pulse align-middle" />
-                  )}
+                  {m.streaming && m.content && <span className="inline-block w-0.5 h-3.5 bg-slate-400 ml-0.5 animate-pulse align-middle" />}
                 </div>
               </div>
             ))}
@@ -381,10 +361,7 @@ export default function DashboardAI() {
 
           {/* Input */}
           <div className="p-3 border-t border-slate-100 flex-shrink-0">
-            <form
-              onSubmit={handleSubmit}
-              className="flex items-center gap-2 bg-slate-50 rounded-2xl px-3 py-1.5 border border-slate-200 focus-within:border-violet-300 focus-within:ring-2 focus-within:ring-violet-100 transition"
-            >
+            <form onSubmit={handleSubmit} className="flex items-center gap-2 bg-slate-50 rounded-2xl px-3 py-1.5 border border-slate-200 focus-within:border-violet-300 focus-within:ring-2 focus-within:ring-violet-100 transition">
               <input
                 ref={inputRef}
                 type="text"
@@ -394,32 +371,19 @@ export default function DashboardAI() {
                 placeholder={streaming ? "Thinking…" : listening ? "Listening…" : "Type or speak…"}
                 className="flex-1 bg-transparent text-sm text-slate-700 placeholder:text-slate-400 focus:outline-none py-1 min-w-0"
               />
-              <button
-                type="button"
-                onClick={startVoice}
-                className={`p-1.5 rounded-xl flex-shrink-0 transition ${
-                  listening
-                    ? "bg-red-100 text-red-500 hover:bg-red-200"
-                    : "text-slate-400 hover:text-violet-600 hover:bg-violet-50"
-                }`}
-                title={listening ? "Stop" : "Voice input"}
-              >
+              <button type="button" onClick={startVoice}
+                className={`p-1.5 rounded-xl flex-shrink-0 transition ${listening ? "bg-red-100 text-red-500 hover:bg-red-200" : "text-slate-400 hover:text-violet-600 hover:bg-violet-50"}`}
+                title={listening ? "Stop" : "Voice input"}>
                 {listening ? <MicOff size={15} /> : <Mic size={15} />}
               </button>
-              <button
-                type="submit"
-                disabled={!input.trim() || streaming}
+              <button type="submit" disabled={!input.trim() || streaming}
                 className="p-1.5 rounded-xl flex-shrink-0 text-white disabled:opacity-40 hover:opacity-90 transition shadow-sm"
-                style={{ background: "linear-gradient(135deg,#7c3aed,#a855f7)" }}
-              >
-                {streaming
-                  ? <Loader2 size={15} className="animate-spin" />
-                  : <Send size={15} />}
+                style={{ background: "linear-gradient(135deg,#7c3aed,#a855f7)" }}>
+                {streaming ? <Loader2 size={15} className="animate-spin" /> : <Send size={15} />}
               </button>
             </form>
             <p className="text-[10px] text-slate-400 text-center mt-1.5">
-              Powered by WebTalk AI
-              {messages.length > 0 && ` · ${Math.ceil(messages.length / 2)} turn${messages.length > 2 ? "s" : ""}`}
+              Powered by WebTalk AI{messages.length > 0 && ` · ${Math.ceil(messages.length / 2)} turn${messages.length > 2 ? "s" : ""}`}
             </p>
           </div>
         </div>
@@ -430,33 +394,20 @@ export default function DashboardAI() {
         onClick={() => setOpen(v => !v)}
         className="pointer-events-auto w-14 h-14 rounded-2xl shadow-xl flex items-center justify-center transition-all duration-200 hover:scale-105 active:scale-95"
         style={{
-          background: open
-            ? "#334155"
-            : "linear-gradient(135deg,#7c3aed,#a855f7)",
-          boxShadow: open
-            ? "0 10px 25px rgba(0,0,0,.2)"
-            : "0 10px 30px rgba(124,58,237,.4)",
+          background: open ? "#334155" : "linear-gradient(135deg,#7c3aed,#a855f7)",
+          boxShadow: open ? "0 10px 25px rgba(0,0,0,.2)" : "0 10px 30px rgba(124,58,237,.4)",
         }}
         title="Dashboard AI Assistant"
       >
-        {open ? (
-          <X size={20} className="text-white" />
-        ) : (
+        {open ? <X size={20} className="text-white" /> : (
           <div className="relative">
             <MessageSquare size={20} className="text-white" />
-            {isActive && (
-              <span className="absolute -top-1.5 -right-1.5 w-3 h-3 rounded-full bg-emerald-400 border-2 border-white" />
-            )}
+            {isActive && <span className="absolute -top-1.5 -right-1.5 w-3 h-3 rounded-full bg-emerald-400 border-2 border-white" />}
           </div>
         )}
       </button>
 
-      <style>{`
-        @keyframes pulse {
-          0%, 100% { opacity: 1; transform: scale(1); }
-          50%       { opacity: .85; transform: scale(1.05); }
-        }
-      `}</style>
+      <style>{`@keyframes pulse { 0%,100%{opacity:1;transform:scale(1)} 50%{opacity:.85;transform:scale(1.05)} }`}</style>
     </div>
   );
 }

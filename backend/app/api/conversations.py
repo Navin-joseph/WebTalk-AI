@@ -292,6 +292,34 @@ async def dashboard_tts(
     )
 
 
+@router.post("/tts/stream")
+async def dashboard_tts_stream(
+    payload: _TTSRequest,
+    user: TokenPayload = Depends(get_current_user),
+):
+    """Streaming TTS for Dashboard AI — first audio bytes in ~100 ms."""
+    from ..voice.tts import get_tts
+
+    text = payload.text.strip()[:500]
+    if not text:
+        raise HTTPException(status_code=400, detail="Text required")
+
+    tts = get_tts()
+
+    async def gen():
+        try:
+            async for chunk in tts.synthesize_stream(text):
+                yield chunk
+        except Exception:
+            pass
+
+    return StreamingResponse(
+        gen(),
+        media_type="audio/mpeg",
+        headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+    )
+
+
 def _upsert_conversation(db: Client, client_id: str, session_id: str, user_msg: str, ai_msg: str):
     existing = db.table("conversations").select("id, messages").eq("client_id", client_id).eq("session_id", session_id).execute()
 

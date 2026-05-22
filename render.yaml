@@ -60,19 +60,21 @@ services:
       - key: DEEPGRAM_API_KEY
         sync: false
 
-      # TTS — set TTS_PROVIDER to "elevenlabs" or "cartesia"
+      # TTS — Cartesia gives faster streaming (first audio in ~100 ms)
+      # Change CARTESIA_VOICE_ID to any voice from https://play.cartesia.ai/voices
       - key: TTS_PROVIDER
-        value: elevenlabs
+        value: cartesia
+      - key: CARTESIA_API_KEY
+        sync: false
+      - key: CARTESIA_VOICE_ID
+        value: 156fb8d2-335b-4950-9cb3-a2d33befec77   # Helpful Woman (warm, clear)
+      - key: CARTESIA_MODEL_ID
+        value: sonic-2
+      # ElevenLabs kept as fallback (set TTS_PROVIDER=elevenlabs to switch back)
       - key: ELEVENLABS_API_KEY
         sync: false
       - key: ELEVENLABS_VOICE_ID
         value: 21m00Tcm4TlvDq8ikWAM
-      - key: CARTESIA_API_KEY
-        sync: false
-      - key: CARTESIA_VOICE_ID
-        sync: false
-      - key: CARTESIA_MODEL_ID
-        value: sonic-2
 
       # CORS — add your frontend's onrender.com URL once it's deployed
       - key: ALLOWED_ORIGINS

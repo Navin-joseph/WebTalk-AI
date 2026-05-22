@@ -275,6 +275,42 @@ async def widget_tts(
     )
 
 
+@router.post("/tts/stream")
+async def widget_tts_stream(
+    payload: TTSRequest = Body(...),
+    client: dict = Depends(get_client_from_api_key),
+):
+    """
+    Streaming TTS — pipes Cartesia SSE chunks directly to the browser.
+    First audio bytes arrive in ~100-150 ms instead of ~500-800 ms (one-shot).
+    The browser plays via MediaSource API and hears audio almost immediately.
+    """
+    from ..voice.tts import get_tts
+    from fastapi.responses import StreamingResponse
+
+    text = payload.text.strip()[:1200]
+    if not text:
+        raise HTTPException(status_code=400, detail="Text required")
+
+    client_id = client.get("id", "?")
+    logger.info("tts/stream IN client=%s len=%d", client_id, len(text))
+
+    tts = get_tts()
+
+    async def gen():
+        try:
+            async for chunk in tts.synthesize_stream(text):
+                yield chunk
+        except Exception:
+            logger.exception("tts/stream gen failed client=%s", client_id)
+
+    return StreamingResponse(
+        gen(),
+        media_type="audio/mpeg",
+        headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+    )
+
+
 def _upsert_conversation(
     db: Client, client_id: str, session_id: str,
     user_msg: str, ai_msg: str, channel: str = "text",

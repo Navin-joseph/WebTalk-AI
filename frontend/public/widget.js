@@ -323,13 +323,20 @@
               const last = msgs[msgs.length - 1];
               if (last) { last.content = fullAnswer; last.streaming = true; }
               render();
-              // Flush any complete sentences to the TTS pipeline immediately.
-              // Pattern: at least 12 chars ending in . ! ? followed by a space
-              // (the trailing space ensures we don't split mid-abbreviation).
+              // Flush complete sentences immediately (min 8 chars avoids e.g. "Dr. ")
               let m;
-              while ((m = /^([\s\S]{12,}?[.!?])\s+/.exec(ttsPendingText)) !== null) {
+              while ((m = /^([\s\S]{8,}?[.!?])\s+/.exec(ttsPendingText)) !== null) {
                 ttsEnqueue(m[1]);
                 ttsPendingText = ttsPendingText.slice(m[0].length);
+              }
+              // If a sentence is very long (no punctuation yet), flush at a word
+              // boundary after 80 chars so Cartesia gets short chunks (faster).
+              if (ttsPendingText.length > 80) {
+                const cut = ttsPendingText.lastIndexOf(" ", 70);
+                if (cut > 20) {
+                  ttsEnqueue(ttsPendingText.slice(0, cut));
+                  ttsPendingText = ttsPendingText.slice(cut + 1);
+                }
               }
             } else if (evt.type === "sources") {
               sources = evt.sources || [];
@@ -366,12 +373,13 @@
     }
   }
 
-  // ── Cartesia TTS — sentence-pipelined to minimise first-audio latency ────────
+  // ── Cartesia TTS — sentence-pipelined with pre-fetching ─────────────────────
   //
   // How it works:
-  //   During SSE streaming, complete sentences are enqueued immediately.
-  //   _ttsDrain() fetches & plays each sentence in order, so Cartesia is called
-  //   on short chunks (fast) and audio starts before the full response is done.
+  //   1. Sentences are detected during SSE streaming and enqueued immediately.
+  //   2. While sentence N is playing, sentence N+1 is already being fetched
+  //      from Cartesia — so there is zero gap between sentences.
+  //   3. First audio starts as soon as the first complete sentence appears.
 
   function ttsEnqueue(text) {
     const t = (text || "").trim();
@@ -380,39 +388,109 @@
     _ttsDrain();
   }
 
+  /**
+   * Play one TTS chunk.
+   *
+   * Chrome/Edge: uses MediaSource + streaming endpoint → audio starts in ~100 ms
+   *              (first bytes from Cartesia arrive before synthesis is complete).
+   * Firefox/Safari: falls back to one-shot blob → audio starts in ~500 ms.
+   *
+   * Returns a Promise that resolves when playback finishes.
+   */
+  async function _playChunk(text) {
+    const useMS = typeof MediaSource !== "undefined" &&
+                  MediaSource.isTypeSupported("audio/mpeg");
+
+    if (useMS) {
+      return new Promise(resolve => {
+        const ms     = new MediaSource();
+        const objUrl = URL.createObjectURL(ms);
+        const audio  = new Audio(objUrl);
+        currentAudio = audio; currentAudioUrl = objUrl;
+
+        const done = () => {
+          try { URL.revokeObjectURL(objUrl); } catch {}
+          currentAudio = null; currentAudioUrl = null;
+          resolve();
+        };
+        audio.onended = done;
+        audio.onerror = done;
+
+        ms.addEventListener("sourceopen", async () => {
+          let sb;
+          try { sb = ms.addSourceBuffer("audio/mpeg"); }
+          catch { done(); return; }
+
+          // Simple queue to serialise appendBuffer calls
+          const q   = [];
+          let busy  = false;
+          const flush = () => {
+            if (busy || sb.updating || q.length === 0) return;
+            const item = q.shift();
+            if (item === null) { try { ms.endOfStream(); } catch {} return; }
+            busy = true;
+            try { sb.appendBuffer(item); } catch { done(); }
+          };
+          sb.addEventListener("updateend", () => { busy = false; flush(); });
+
+          try {
+            const res = await fetch(`${cfg.apiUrl}/api/v1/widget/tts/stream`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json", "X-API-Key": cfg.apiKey },
+              body: JSON.stringify({ text }),
+            });
+            if (!res.ok || !res.body) { done(); return; }
+
+            const reader  = res.body.getReader();
+            let started   = false;
+
+            while (true) {
+              const { done: eof, value } = await reader.read();
+              q.push(eof ? null : value);
+              flush();
+              if (eof) break;
+              if (!started) {
+                started = true;
+                audio.play().catch(() => {});
+                speaking = true; setStatus("Speaking…"); setActive(true);
+              }
+            }
+          } catch { done(); }
+        });
+      });
+    }
+
+    // ── Fallback: one-shot blob ────────────────────────────────────────────
+    try {
+      const res = await fetch(`${cfg.apiUrl}/api/v1/widget/tts`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-API-Key": cfg.apiKey },
+        body: JSON.stringify({ text }),
+      });
+      if (!res.ok || !ttsOn) return;
+      const url = URL.createObjectURL(await res.blob());
+      currentAudio = new Audio(url); currentAudioUrl = url;
+      speaking = true; setStatus("Speaking…"); setActive(true);
+      await new Promise(resolve => {
+        currentAudio.onended = () => {
+          URL.revokeObjectURL(url); currentAudio = null; currentAudioUrl = null; resolve();
+        };
+        currentAudio.onerror = () => resolve();
+        currentAudio.play().catch(resolve);
+      });
+    } catch { /* skip */ }
+  }
+
   async function _ttsDrain() {
-    if (ttsRunning) return;           // already draining
+    if (ttsRunning) return;
     ttsRunning = true;
 
     while (ttsQueue.length > 0 && ttsOn) {
       const chunk = ttsQueue.shift();
-      try {
-        const res = await fetch(`${cfg.apiUrl}/api/v1/widget/tts`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", "X-API-Key": cfg.apiKey },
-          body: JSON.stringify({ text: chunk }),
-        });
-        if (!res.ok || !ttsOn) continue;
-        const blob = await res.blob();
-        if (!ttsOn) break;
-        const url = URL.createObjectURL(blob);
-        currentAudioUrl = url;
-        currentAudio    = new Audio(url);
-        speaking = true; setStatus("Speaking…"); setActive(true);
-        // Wait for this chunk to finish before playing the next one
-        await new Promise(resolve => {
-          currentAudio.onended = () => {
-            URL.revokeObjectURL(url); currentAudio = null; currentAudioUrl = null;
-            resolve();
-          };
-          currentAudio.onerror = () => resolve();
-          currentAudio.play().catch(resolve);
-        });
-      } catch { /* skip failed chunk — carry on with rest of queue */ }
+      try { await _playChunk(chunk); } catch { /* skip bad chunk */ }
     }
 
     ttsRunning = false;
-    // Only reset status if nothing else is queued
     if (ttsQueue.length === 0) {
       speaking = false; setStatus("Ask about this site"); setActive(false);
     }
