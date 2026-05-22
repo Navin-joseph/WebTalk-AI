@@ -63,7 +63,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Deploy backend
+        if: ${{ secrets.RENDER_BACKEND_DEPLOY_HOOK != '' }}
         run: curl -f -X POST "${{ secrets.RENDER_BACKEND_DEPLOY_HOOK }}"
 
       - name: Deploy frontend
+        if: ${{ secrets.RENDER_FRONTEND_DEPLOY_HOOK != '' }}
         run: curl -f -X POST "${{ secrets.RENDER_FRONTEND_DEPLOY_HOOK }}"
