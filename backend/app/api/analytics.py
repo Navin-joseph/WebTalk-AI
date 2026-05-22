@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, Query
 from supabase import Client
 from datetime import datetime, timedelta
+from collections import defaultdict
 from ..database import get_supabase
 from ..auth.dependencies import get_current_user
 from ..models import AnalyticsResponse, TokenPayload
@@ -54,6 +55,47 @@ async def get_analytics(
         period_start=period_start,
         period_end=period_end,
     )
+
+
+@router.get("/daily")
+async def get_daily_analytics(
+    days: int = Query(30, ge=7, le=90),
+    user: TokenPayload = Depends(get_current_user),
+    db: Client = Depends(get_supabase),
+):
+    """Return per-day text + voice conversation counts for the requested period."""
+    client = db.table("clients").select("id").eq("owner_user_id", user.sub).single().execute()
+    client_id = client.data["id"]
+    period_start = datetime.utcnow() - timedelta(days=days)
+
+    convos = (
+        db.table("conversations")
+        .select("channel, created_at")
+        .eq("client_id", client_id)
+        .gte("created_at", period_start.isoformat())
+        .execute()
+    )
+
+    # Bucket by date
+    daily: dict = defaultdict(lambda: {"text": 0, "voice": 0})
+    for c in convos.data:
+        date = c["created_at"][:10]  # YYYY-MM-DD
+        if c.get("channel") == "voice":
+            daily[date]["voice"] += 1
+        else:
+            daily[date]["text"] += 1
+
+    # Return all dates in range (zero-fill missing days)
+    result = []
+    for i in range(days - 1, -1, -1):
+        d = (datetime.utcnow() - timedelta(days=i)).strftime("%Y-%m-%d")
+        result.append({
+            "date": d,
+            "text": daily[d]["text"],
+            "voice": daily[d]["voice"],
+            "total": daily[d]["text"] + daily[d]["voice"],
+        })
+    return result
 
 
 @router.get("/events")

@@ -3,6 +3,7 @@ import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase";
 import { api } from "@/lib/api";
 import { Copy, Trash2, Plus, Key, Code2, CheckCircle2 } from "lucide-react";
+import ConfirmModal from "@/components/ConfirmModal";
 
 interface ApiKey { id: string; name: string; key_prefix: string; created_at: string; last_used_at?: string; }
 
@@ -13,6 +14,10 @@ export default function ApiKeysPage() {
   const [copied, setCopied] = useState(false);
   const [snippetCopied, setSnippetCopied] = useState(false);
   const [token, setToken] = useState("");
+
+  // Delete-key modal state
+  const [deleteTarget, setDeleteTarget] = useState<ApiKey | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   useEffect(() => {
     const supabase = createClient();
@@ -39,10 +44,18 @@ export default function ApiKeysPage() {
     setNewKeyName("");
   }
 
-  async function revokeKey(id: string) {
-    if (!confirm("Revoke this API key? Widgets using it will stop working.")) return;
-    await api.delete(`/clients/me/api-keys/${id}`, token);
-    setKeys((prev) => prev.filter((k) => k.id !== id));
+  async function confirmRevoke() {
+    if (!deleteTarget) return;
+    setDeleting(true);
+    try {
+      await api.delete(`/clients/me/api-keys/${deleteTarget.id}`, token);
+      setKeys((prev) => prev.filter((k) => k.id !== deleteTarget.id));
+      setDeleteTarget(null);
+    } catch {
+      // keep modal open on error so user sees it didn't work
+    } finally {
+      setDeleting(false);
+    }
   }
 
   const snippet = `<!-- WebTalk AI Widget — paste before </body> -->
@@ -137,7 +150,7 @@ export default function ApiKeysPage() {
               </td></tr>
             )}
             {keys.map((k) => (
-              <tr key={k.id} className="hover:bg-slate-50/60 transition">
+              <tr key={k.id} className="hover:bg-slate-50/60 transition group">
                 <td className="px-6 py-3.5 font-medium text-slate-700">{k.name}</td>
                 <td className="px-6 py-3.5">
                   <code className="text-xs bg-slate-100 text-slate-700 px-2 py-1 rounded">{k.key_prefix}…</code>
@@ -145,7 +158,11 @@ export default function ApiKeysPage() {
                 <td className="px-6 py-3.5 text-slate-400 text-xs">{new Date(k.created_at).toLocaleDateString()}</td>
                 <td className="px-6 py-3.5 text-slate-400 text-xs">{k.last_used_at ? new Date(k.last_used_at).toLocaleDateString() : "Never"}</td>
                 <td className="px-6 py-3.5 text-right">
-                  <button onClick={() => revokeKey(k.id)} className="text-slate-400 hover:text-red-500 transition p-1.5 rounded-lg hover:bg-red-50">
+                  <button
+                    onClick={() => setDeleteTarget(k)}
+                    className="opacity-0 group-hover:opacity-100 text-slate-400 hover:text-red-500 transition p-1.5 rounded-lg hover:bg-red-50"
+                    title="Revoke key"
+                  >
                     <Trash2 size={14} />
                   </button>
                 </td>
@@ -176,6 +193,18 @@ export default function ApiKeysPage() {
           </button>
         </div>
       </div>
+
+      {/* Delete confirmation modal */}
+      <ConfirmModal
+        open={!!deleteTarget}
+        title="Revoke API key?"
+        message={`"${deleteTarget?.name}" will be permanently revoked. Any widgets currently using this key will stop working immediately.`}
+        confirmLabel="Revoke key"
+        danger
+        loading={deleting}
+        onConfirm={confirmRevoke}
+        onCancel={() => { if (!deleting) setDeleteTarget(null); }}
+      />
     </div>
   );
 }

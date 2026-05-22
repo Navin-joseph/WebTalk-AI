@@ -20,6 +20,10 @@
   let ttsQueue = [], ttsRunning = false, ttsPendingText = "";
   // AbortController for the current SSE stream (enables interruption)
   let streamAbort = null;
+  // Resolve handle for currently-playing audio Promise (so stopSpeaking can unblock _ttsDrain)
+  let _ttsResolve = null;
+  // AbortController for in-flight TTS fetch (cancelled when speaking is stopped)
+  let _ttsFetchAbort = null;
 
   // ── Helpers ─────────────────────────────────────────────────────────────────
   function esc(s) {
@@ -500,16 +504,16 @@
               const last = msgs[msgs.length - 1];
               if (last) { last.content = fullAnswer; last.streaming = true; }
               render();
-              // Flush at sentence boundary as soon as we have ≥6 chars (reduced from 8 for faster first audio)
+              // Flush at sentence boundary as soon as we have ≥4 chars
               let m;
-              while ((m = /^([\s\S]{6,}?[.!?])\s+/.exec(ttsPendingText)) !== null) {
+              while ((m = /^([\s\S]{4,}?[.!?])\s+/.exec(ttsPendingText)) !== null) {
                 ttsEnqueue(m[1]);
                 ttsPendingText = ttsPendingText.slice(m[0].length);
               }
-              // Force-flush at word boundary after 50 chars (reduced from 80 — shorter = faster Cartesia synthesis)
-              if (ttsPendingText.length > 50) {
-                const cut = ttsPendingText.lastIndexOf(" ", 42);
-                if (cut > 10) {
+              // Force-flush at word boundary after 38 chars — shorter chunks = faster Cartesia synthesis
+              if (ttsPendingText.length > 38) {
+                const cut = ttsPendingText.lastIndexOf(" ", 30);
+                if (cut > 8) {
                   ttsEnqueue(ttsPendingText.slice(0, cut));
                   ttsPendingText = ttsPendingText.slice(cut + 1);
                 }
@@ -569,15 +573,23 @@
    * Returns null on any error or if TTS has been turned off.
    */
   async function _fetchAudio(text) {
+    // Cancel any previous in-flight fetch and issue a new one
+    if (_ttsFetchAbort) _ttsFetchAbort.abort();
+    _ttsFetchAbort = new AbortController();
     try {
       const res = await fetch(`${cfg.apiUrl}/api/v1/widget/tts`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-API-Key": cfg.apiKey },
         body: JSON.stringify({ text }),
+        signal: _ttsFetchAbort.signal,
       });
+      _ttsFetchAbort = null;
       if (!res.ok || !ttsOn) return null;
       return URL.createObjectURL(await res.blob());
-    } catch { return null; }
+    } catch (e) {
+      if (e.name === "AbortError") return null;
+      return null;
+    }
   }
 
   /**
@@ -606,15 +618,18 @@
       setActive(true);
 
       await new Promise(resolve => {
+        // Store resolver so stopSpeaking() can immediately unblock this loop
+        _ttsResolve = resolve;
         currentAudio.oncanplay = () => startLipSync(currentAudio);
         currentAudio.onended = () => {
+          _ttsResolve = null;
           stopLipSync();
           URL.revokeObjectURL(url);
           currentAudio = null; currentAudioUrl = null;
           resolve();
         };
-        currentAudio.onerror = () => { stopLipSync(); resolve(); };
-        currentAudio.play().catch(resolve);
+        currentAudio.onerror = () => { _ttsResolve = null; stopLipSync(); resolve(); };
+        currentAudio.play().catch(() => { _ttsResolve = null; resolve(); });
       });
     }
 
@@ -635,6 +650,10 @@
     ttsPendingText = "";
     ttsRunning    = false;
     stopLipSync();
+    // Unblock _ttsDrain if it is awaiting currentAudio.onended — pause() never fires onended
+    if (_ttsResolve) { _ttsResolve(); _ttsResolve = null; }
+    // Cancel any in-flight Cartesia fetch
+    if (_ttsFetchAbort) { _ttsFetchAbort.abort(); _ttsFetchAbort = null; }
     if (currentAudio)   { currentAudio.pause();              currentAudio    = null; }
     if (currentAudioUrl){ URL.revokeObjectURL(currentAudioUrl); currentAudioUrl = null; }
     speaking = false;

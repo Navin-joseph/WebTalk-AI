@@ -2,7 +2,8 @@
 import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase";
 import { api } from "@/lib/api";
-import { Loader2, CheckCircle2, XCircle, Clock, Globe, Play, FileText, Trash2, DatabaseZap } from "lucide-react";
+import { Loader2, CheckCircle2, XCircle, Clock, Globe, Play, FileText, Trash2, DatabaseZap, X } from "lucide-react";
+import ConfirmModal from "@/components/ConfirmModal";
 
 interface Job {
   id: string;
@@ -13,6 +14,8 @@ interface Job {
   error_message?: string;
   created_at: string;
 }
+
+interface Toast { id: number; type: "success" | "error"; message: string; }
 
 const statusBadge = (s: Job["status"]) => {
   const map = {
@@ -35,10 +38,23 @@ export default function TrainingPage() {
   const [url, setUrl] = useState("");
   const [maxPages, setMaxPages] = useState(50);
   const [submitting, setSubmitting] = useState(false);
-  const [deletingId, setDeletingId] = useState<string | null>(null);
-  const [clearing, setClearing] = useState(false);
   const [token, setToken] = useState("");
   const [error, setError] = useState("");
+  const [toasts, setToasts] = useState<Toast[]>([]);
+
+  // Modal state — one modal handles both delete-job and clear-kb actions
+  const [modal, setModal] = useState<{
+    type: "deleteJob" | "clearKb";
+    jobId?: string;
+    jobUrl?: string;
+  } | null>(null);
+  const [modalLoading, setModalLoading] = useState(false);
+
+  function showToast(type: "success" | "error", message: string) {
+    const id = Date.now();
+    setToasts(prev => [...prev, { id, type, message }]);
+    setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), 4000);
+  }
 
   useEffect(() => {
     const supabase = createClient();
@@ -66,6 +82,7 @@ export default function TrainingPage() {
       const job = await api.post<Job>("/training/jobs", { website_url: url, max_pages: maxPages }, token);
       setJobs(prev => [job, ...prev]);
       setUrl("");
+      showToast("success", "Crawl job started! Training your AI…");
     } catch (err: unknown) {
       setError(err instanceof Error ? err.message : "Failed to start job");
     } finally {
@@ -73,31 +90,41 @@ export default function TrainingPage() {
     }
   }
 
-  async function clearData() {
-    if (!confirm("This will delete ALL knowledge base vectors for your AI agent. The agent will not know anything until you run a new training job. Continue?")) return;
-    setClearing(true);
+  async function handleModalConfirm() {
+    if (!modal) return;
+    setModalLoading(true);
     try {
-      await api.delete("/training/data", token);
-      alert("Knowledge base cleared. Run a new training job to re-train your agent.");
+      if (modal.type === "deleteJob" && modal.jobId) {
+        await api.delete(`/training/jobs/${modal.jobId}`, token);
+        setJobs(prev => prev.filter(j => j.id !== modal.jobId));
+        showToast("success", "Training job deleted.");
+      } else if (modal.type === "clearKb") {
+        await api.delete("/training/data", token);
+        showToast("success", "Knowledge base cleared. Run a new training job to re-train your agent.");
+      }
+      setModal(null);
     } catch (err: unknown) {
-      alert(err instanceof Error ? err.message : "Failed to clear knowledge base");
+      showToast("error", err instanceof Error ? err.message : "Operation failed");
     } finally {
-      setClearing(false);
+      setModalLoading(false);
     }
   }
 
-  async function deleteJob(id: string) {
-    if (!confirm("Delete this training job record?")) return;
-    setDeletingId(id);
-    try {
-      await api.delete(`/training/jobs/${id}`, token);
-      setJobs(prev => prev.filter(j => j.id !== id));
-    } catch (err: unknown) {
-      alert(err instanceof Error ? err.message : "Failed to delete job");
-    } finally {
-      setDeletingId(null);
-    }
-  }
+  const modalConfig = modal
+    ? modal.type === "deleteJob"
+      ? {
+          title: "Delete training job?",
+          message: `This will remove the job record for "${modal.jobUrl}". The crawled knowledge is kept — only the job entry is deleted.`,
+          confirmLabel: "Delete job",
+          danger: true,
+        }
+      : {
+          title: "Clear entire knowledge base?",
+          message: "This will permanently delete ALL knowledge base vectors for your AI agent. The agent will not know anything until you run a new training job.",
+          confirmLabel: "Yes, clear everything",
+          danger: true,
+        }
+    : null;
 
   return (
     <div className="space-y-8">
@@ -160,13 +187,12 @@ export default function TrainingPage() {
           <div className="flex items-center gap-3">
             <span className="text-xs text-slate-400">{jobs.length} total</span>
             <button
-              onClick={clearData}
-              disabled={clearing}
-              className="flex items-center gap-1.5 text-xs text-red-500 hover:text-red-700 hover:bg-red-50 px-2.5 py-1.5 rounded-lg border border-red-200 hover:border-red-300 transition disabled:opacity-50"
+              onClick={() => setModal({ type: "clearKb" })}
+              className="flex items-center gap-1.5 text-xs text-red-500 hover:text-red-700 hover:bg-red-50 px-2.5 py-1.5 rounded-lg border border-red-200 hover:border-red-300 transition"
               title="Delete all knowledge base vectors and start fresh"
             >
-              {clearing ? <Loader2 size={12} className="animate-spin" /> : <DatabaseZap size={12} />}
-              {clearing ? "Clearing…" : "Clear knowledge base"}
+              <DatabaseZap size={12} />
+              Clear knowledge base
             </button>
           </div>
         </div>
@@ -224,14 +250,11 @@ export default function TrainingPage() {
                 <td className="px-6 py-3.5 text-right">
                   {job.status !== "running" && job.status !== "pending" && (
                     <button
-                      onClick={() => deleteJob(job.id)}
-                      disabled={deletingId === job.id}
-                      className="opacity-0 group-hover:opacity-100 text-slate-400 hover:text-red-500 transition p-1.5 rounded-lg hover:bg-red-50 disabled:opacity-50"
+                      onClick={() => setModal({ type: "deleteJob", jobId: job.id, jobUrl: job.website_url })}
+                      className="opacity-0 group-hover:opacity-100 text-slate-400 hover:text-red-500 transition p-1.5 rounded-lg hover:bg-red-50"
                       title="Delete job"
                     >
-                      {deletingId === job.id
-                        ? <Loader2 size={14} className="animate-spin" />
-                        : <Trash2 size={14} />}
+                      <Trash2 size={14} />
                     </button>
                   )}
                 </td>
@@ -239,6 +262,45 @@ export default function TrainingPage() {
             ))}
           </tbody>
         </table>
+      </div>
+
+      {/* Confirm modal */}
+      {modalConfig && (
+        <ConfirmModal
+          open={!!modal}
+          title={modalConfig.title}
+          message={modalConfig.message}
+          confirmLabel={modalConfig.confirmLabel}
+          danger={modalConfig.danger}
+          loading={modalLoading}
+          onConfirm={handleModalConfirm}
+          onCancel={() => { if (!modalLoading) setModal(null); }}
+        />
+      )}
+
+      {/* Toast notifications */}
+      <div className="fixed bottom-6 left-1/2 -translate-x-1/2 flex flex-col gap-2 z-[9998] pointer-events-none">
+        {toasts.map(t => (
+          <div
+            key={t.id}
+            className={`flex items-center gap-3 px-4 py-3 rounded-xl shadow-lg text-sm font-medium text-white pointer-events-auto ${
+              t.type === "success"
+                ? "bg-gradient-to-r from-emerald-500 to-teal-500"
+                : "bg-gradient-to-r from-red-500 to-rose-500"
+            }`}
+          >
+            {t.type === "success"
+              ? <CheckCircle2 size={15} />
+              : <XCircle size={15} />}
+            {t.message}
+            <button
+              onClick={() => setToasts(prev => prev.filter(x => x.id !== t.id))}
+              className="ml-1 opacity-75 hover:opacity-100"
+            >
+              <X size={13} />
+            </button>
+          </div>
+        ))}
       </div>
     </div>
   );
