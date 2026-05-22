@@ -18,6 +18,8 @@
   let recognition = null, currentAudio = null, currentAudioUrl = null;
   // TTS sentence pipeline — lets audio start while text is still streaming
   let ttsQueue = [], ttsRunning = false, ttsPendingText = "";
+  // AbortController for the current SSE stream (enables interruption)
+  let streamAbort = null;
 
   // ── Helpers ─────────────────────────────────────────────────────────────────
   function esc(s) {
@@ -63,6 +65,39 @@
     const micOv = document.getElementById("wtai-mic");
     if (micOv && state === "listening") micOv.classList.add("on");
     else if (micOv) micOv.classList.remove("on");
+  }
+
+  /** Sync send button appearance: stop (red ×) while streaming, send arrow otherwise */
+  function _updateSendBtn() {
+    if (!sendBtn) return;
+    if (streaming) {
+      sendBtn.innerHTML = ICO.close;
+      sendBtn.disabled  = false;
+      sendBtn.title     = "Stop response";
+      sendBtn.classList.add("stop");
+    } else {
+      sendBtn.innerHTML = ICO.send;
+      sendBtn.disabled  = !inputEl?.value.trim();
+      sendBtn.title     = "Send";
+      sendBtn.classList.remove("stop");
+    }
+  }
+
+  /** Interrupt the current SSE stream and TTS without sending a new message */
+  function _interruptStream() {
+    if (streamAbort) { streamAbort.abort(); streamAbort = null; }
+    stopSpeaking();
+    // Keep partial AI reply if it has content, else remove empty placeholder
+    const last = msgs[msgs.length - 1];
+    if (last?.streaming) {
+      if (last.content?.trim()) last.streaming = false;
+      else msgs.pop();
+    }
+    streaming = false;
+    ttsPendingText = "";
+    setAvatarState("idle");
+    _updateSendBtn();
+    render();
   }
 
   // ── CSS ─────────────────────────────────────────────────────────────────────
@@ -143,6 +178,7 @@
 .wtai-send{background:linear-gradient(135deg,${p},${a});box-shadow:0 2px 8px ${p}55}
 .wtai-send:hover:not(:disabled){transform:scale(1.06);opacity:.9}
 .wtai-send:disabled{opacity:.35;cursor:not-allowed;box-shadow:none}
+.wtai-send.stop{background:linear-gradient(135deg,#ef4444,#dc2626) !important;box-shadow:0 2px 8px rgba(239,68,68,.5) !important;opacity:1 !important;cursor:pointer !important}
 .wtai-send svg{width:14px;height:14px;fill:#fff}
 .wtai-foot{text-align:center;padding:5px;font-size:10px;color:#cbd5e1;border-top:1px solid rgba(148,163,184,.08);flex-shrink:0}
 .wtai-foot a{color:${p};text-decoration:none}
@@ -309,9 +345,12 @@
     // Events
     launcher.onclick = togglePanel;
     document.getElementById("wtai-close").onclick = togglePanel;
-    sendBtn.onclick = () => send(inputEl.value);
-    inputEl.addEventListener("keydown", e => { if (e.key === "Enter" && !streaming) send(inputEl.value); });
-    inputEl.addEventListener("input",   () => { sendBtn.disabled = !inputEl.value.trim() || streaming; });
+    sendBtn.onclick = () => {
+      if (streaming && !inputEl.value.trim()) _interruptStream();  // red × with empty input = just stop
+      else send(inputEl.value);                                     // send (interrupts if needed)
+    };
+    inputEl.addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey && inputEl.value.trim()) send(inputEl.value); });
+    inputEl.addEventListener("input",   () => _updateSendBtn());
     if (micBtn) micBtn.onclick = toggleVoice;
     muteBtn.onclick = () => {
       ttsOn = !ttsOn;
@@ -399,28 +438,40 @@
 
   // ── Send message (SSE streaming) ─────────────────────────────────────────────
   async function send(text) {
-    if (!text || !text.trim() || streaming) return;
+    if (!text || !text.trim()) return;
     text = text.trim();
-    inputEl.value = "";
-    sendBtn.disabled = true;
 
+    // ── Interrupt any in-progress response before starting a new one ──
+    if (streamAbort) { streamAbort.abort(); streamAbort = null; }
+    stopSpeaking();
+    if (streaming) {
+      const last = msgs[msgs.length - 1];
+      if (last?.streaming) {
+        if (last.content?.trim()) last.streaming = false;  // keep partial
+        else msgs.pop();                                    // discard empty
+      }
+      streaming = false;
+    }
+    ttsPendingText = "";
+    // ─────────────────────────────────────────────────────────────────
+
+    inputEl.value = "";
     msgs.push({ role: "user", content: text });
     msgs.push({ role: "assistant", content: "", streaming: true });
     streaming = true;
-    setStatus("Thinking…");
     setAvatarState("thinking");
-    setActive(true);
+    _updateSendBtn();
     render();
 
     let fullAnswer = "", sources = [];
-    ttsPendingText = "";   // reset sentence accumulator for this turn
-    stopSpeaking();        // cancel any previous TTS
+    streamAbort = new AbortController();
 
     try {
       const res = await fetch(`${cfg.apiUrl}/api/v1/widget/chat/stream`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-API-Key": cfg.apiKey },
         body: JSON.stringify({ message: text, session_id: sessionId, use_voice: false }),
+        signal: streamAbort.signal,
       });
 
       if (!res.ok || !res.body) {
@@ -449,17 +500,16 @@
               const last = msgs[msgs.length - 1];
               if (last) { last.content = fullAnswer; last.streaming = true; }
               render();
-              // Flush complete sentences immediately (min 8 chars avoids e.g. "Dr. ")
+              // Flush at sentence boundary as soon as we have ≥6 chars (reduced from 8 for faster first audio)
               let m;
-              while ((m = /^([\s\S]{8,}?[.!?])\s+/.exec(ttsPendingText)) !== null) {
+              while ((m = /^([\s\S]{6,}?[.!?])\s+/.exec(ttsPendingText)) !== null) {
                 ttsEnqueue(m[1]);
                 ttsPendingText = ttsPendingText.slice(m[0].length);
               }
-              // If a sentence is very long (no punctuation yet), flush at a word
-              // boundary after 80 chars so Cartesia gets short chunks (faster).
-              if (ttsPendingText.length > 80) {
-                const cut = ttsPendingText.lastIndexOf(" ", 70);
-                if (cut > 20) {
+              // Force-flush at word boundary after 50 chars (reduced from 80 — shorter = faster Cartesia synthesis)
+              if (ttsPendingText.length > 50) {
+                const cut = ttsPendingText.lastIndexOf(" ", 42);
+                if (cut > 10) {
                   ttsEnqueue(ttsPendingText.slice(0, cut));
                   ttsPendingText = ttsPendingText.slice(cut + 1);
                 }
@@ -473,28 +523,25 @@
         }
       }
     } catch (err) {
-      if (err.name === "AbortError") return;
+      if (err.name === "AbortError") return;  // interrupted — _interruptStream() already cleaned up
       fullAnswer = fullAnswer || (
         err.message === "Failed to fetch"
           ? "Couldn't reach the server. Please check your connection."
           : err.message || "Something went wrong. Please try again."
       );
     } finally {
+      streamAbort = null;
       const last = msgs[msgs.length - 1];
-      if (last) {
-        last.content = fullAnswer || "I couldn't generate a response. Please try again.";
+      if (last?.streaming) {
+        last.content   = fullAnswer || last.content || "I couldn't generate a response. Please try again.";
         last.streaming = false;
         if (sources.length) last.sources = sources;
       }
       streaming = false;
-      sendBtn.disabled = !inputEl.value.trim();
-      if (!speaking) {
-        setStatus("Ask about this site");
-        setAvatarState("idle");
-        setActive(false);
-      }
+      _updateSendBtn();
+      if (!speaking) setAvatarState("idle");
       render();
-      // Enqueue any leftover text (last sentence that had no trailing space / entire 1-sentence reply)
+      // Enqueue any leftover sentence fragment
       if (ttsOn && ttsPendingText.trim()) {
         ttsEnqueue(ttsPendingText.trim());
         ttsPendingText = "";

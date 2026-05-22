@@ -185,10 +185,27 @@ export default function DashboardAI() {
 
   // ── Chat ─────────────────────────────────────────────────────────────────────
   const sendMessage = useCallback(async (text: string) => {
-    if (!text.trim() || !token || streaming) return;
+    if (!text.trim() || !token) return;
+
+    // ── Interrupt any in-progress response before starting a new one ─────────
+    abortRef.current?.abort();
+    abortRef.current = new AbortController();
     stopTTS();
     ttsAbortRef.current = false;
     ttsPendingRef.current = "";
+    if (streamingRef.current) {
+      setMessages(prev => {
+        const next = [...prev];
+        const last = next[next.length - 1];
+        if (last?.streaming) {
+          if (last.content.trim()) return [...next.slice(0, -1), { ...last, streaming: false }];
+          return next.slice(0, -1);
+        }
+        return next;
+      });
+      setStreaming(false);
+    }
+    // ─────────────────────────────────────────────────────────────────────────
 
     setMessages(prev => [
       ...prev,
@@ -199,8 +216,6 @@ export default function DashboardAI() {
     setStreaming(true);
     setAvatarState("thinking");
 
-    abortRef.current?.abort();
-    abortRef.current = new AbortController();
     let fullAnswer = "";
     const history = messages.map(m => ({ role: m.role, content: m.content }));
 
@@ -238,14 +253,15 @@ export default function DashboardAI() {
                 next[next.length - 1] = { role: "assistant", content: fullAnswer, streaming: true };
                 return next;
               });
+              // Lower thresholds → voice starts sooner, shorter chunks = faster Cartesia synthesis
               let m: RegExpMatchArray | null;
-              while ((m = /^([\s\S]{8,}?[.!?])\s+/.exec(ttsPendingRef.current)) !== null) {
+              while ((m = /^([\s\S]{6,}?[.!?])\s+/.exec(ttsPendingRef.current)) !== null) {
                 enqueueTTS(m[1]);
                 ttsPendingRef.current = ttsPendingRef.current.slice(m[0].length);
               }
-              if (ttsPendingRef.current.length > 80) {
-                const cut = ttsPendingRef.current.lastIndexOf(" ", 70);
-                if (cut > 20) {
+              if (ttsPendingRef.current.length > 50) {
+                const cut = ttsPendingRef.current.lastIndexOf(" ", 42);
+                if (cut > 10) {
                   enqueueTTS(ttsPendingRef.current.slice(0, cut));
                   ttsPendingRef.current = ttsPendingRef.current.slice(cut + 1);
                 }
@@ -276,11 +292,11 @@ export default function DashboardAI() {
         setAvatarState("idle");
       }
     }
-  }, [token, streaming, messages, stopTTS, enqueueTTS]);
+  }, [token, messages, stopTTS, enqueueTTS]);
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
-    sendMessage(input);
+    if (input.trim()) sendMessage(input);
   }
 
   function startVoice() {
@@ -454,15 +470,39 @@ export default function DashboardAI() {
                 type="text"
                 value={input}
                 onChange={e => setInput(e.target.value)}
-                disabled={streaming}
-                placeholder={streaming ? "Thinking…" : listening ? "Listening…" : "Type or speak…"}
+                placeholder={listening ? "Listening…" : streaming && !input ? "Responding… (type to interrupt)" : "Type or speak…"}
                 className="flex-1 bg-transparent text-sm text-slate-700 placeholder:text-slate-400 focus:outline-none py-1 min-w-0"
               />
-              <button type="submit" disabled={!input.trim() || streaming}
-                className="p-1.5 rounded-xl flex-shrink-0 text-white disabled:opacity-40 hover:opacity-90 transition shadow-sm"
-                style={{ background: "linear-gradient(135deg,#7c3aed,#a855f7)" }}>
-                {streaming ? <Loader2 size={15} className="animate-spin" /> : <Send size={15} />}
-              </button>
+              {/* During streaming with no text: red stop button. Otherwise: send button */}
+              {streaming && !input.trim() ? (
+                <button type="button" onClick={() => {
+                  abortRef.current?.abort();
+                  stopTTS();
+                  setMessages(prev => {
+                    const next = [...prev];
+                    const last = next[next.length - 1];
+                    if (last?.streaming) {
+                      if (last.content.trim()) return [...next.slice(0, -1), { ...last, streaming: false }];
+                      return next.slice(0, -1);
+                    }
+                    return next;
+                  });
+                  setStreaming(false);
+                  setAvatarState("idle");
+                }}
+                  className="p-1.5 rounded-xl flex-shrink-0 text-white hover:opacity-90 transition shadow-sm"
+                  style={{ background: "linear-gradient(135deg,#ef4444,#dc2626)" }}
+                  title="Stop response">
+                  <X size={15} />
+                </button>
+              ) : (
+                <button type="submit" disabled={!input.trim()}
+                  className="p-1.5 rounded-xl flex-shrink-0 text-white disabled:opacity-40 hover:opacity-90 transition shadow-sm"
+                  style={{ background: streaming ? "linear-gradient(135deg,#ef4444,#dc2626)" : "linear-gradient(135deg,#7c3aed,#a855f7)" }}
+                  title={streaming ? "Interrupt & send" : "Send"}>
+                  {streaming ? <Send size={15} /> : <Send size={15} />}
+                </button>
+              )}
             </form>
             <p className="text-[10px] text-slate-400 text-center mt-1.5">
               Powered by WebTalk AI{messages.length > 0 && ` · ${Math.ceil(messages.length / 2)} turn${messages.length > 2 ? "s" : ""}`}
