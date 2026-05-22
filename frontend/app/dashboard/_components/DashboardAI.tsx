@@ -15,8 +15,8 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
 // ── Human face SVG (same design as the embedded widget) ──────────────────────
 function FaceSVG({ jawRef, teethRef }: {
-  jawRef: React.RefObject<SVGGElement | null>;
-  teethRef: React.RefObject<SVGRectElement | null>;
+  jawRef: React.RefObject<SVGGElement>;
+  teethRef: React.RefObject<SVGRectElement>;
 }) {
   return (
     <svg viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg" style={{ width: "100%", height: "100%", display: "block" }}>
@@ -137,8 +137,8 @@ export default function DashboardAI() {
   const streamingRef    = useRef(false);   // mirror for async callbacks
 
   // Lip-sync refs
-  const jawRef          = useRef<SVGGElement | null>(null);
-  const teethRef        = useRef<SVGRectElement | null>(null);
+  const jawRef          = useRef<SVGGElement>(null);
+  const teethRef        = useRef<SVGRectElement>(null);
   const lipCtxRef       = useRef<AudioContext | null>(null);
   const lipAnimRef      = useRef<number | null>(null);
   const lipSrcRef       = useRef<MediaElementAudioSourceNode | null>(null);
