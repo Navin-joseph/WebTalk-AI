@@ -13,7 +13,6 @@ export default function ApiKeysPage() {
   const [copied, setCopied] = useState(false);
   const [snippetCopied, setSnippetCopied] = useState(false);
   const [token, setToken] = useState("");
-  const [clientId, setClientId] = useState("");
 
   useEffect(() => {
     const supabase = createClient();
@@ -21,11 +20,7 @@ export default function ApiKeysPage() {
       if (!data.session) return;
       setToken(data.session.access_token);
       try {
-        const [clientData, keysData] = await Promise.all([
-          api.get<{ id: string }>("/clients/me", data.session.access_token),
-          api.get<ApiKey[]>("/clients/me/api-keys", data.session.access_token),
-        ]);
-        setClientId(clientData.id);
+        const keysData = await api.get<ApiKey[]>("/clients/me/api-keys", data.session.access_token);
         setKeys(keysData);
       } catch {}
     });

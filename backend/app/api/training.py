@@ -1,4 +1,3 @@
-import asyncio
 from fastapi import APIRouter, Depends, HTTPException, BackgroundTasks
 from supabase import Client
 from ..database import get_supabase

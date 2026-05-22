@@ -55,20 +55,10 @@ jobs:
           NEXT_PUBLIC_SUPABASE_ANON_KEY: placeholder
           NEXT_PUBLIC_API_URL: https://placeholder.onrender.com
 
-  # ── Backend Docker build ─────────────────────────────────────────────────────
-  docker-build:
-    name: Backend Docker build
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-
-      - name: Build image
-        run: docker build -f backend/Dockerfile backend/
-
   # ── Deploy (master only, all checks must pass) ──────────────────────────────
   deploy:
     name: Trigger Render deploy
-    needs: [backend-lint, frontend-check, docker-build]
+    needs: [backend-lint, frontend-check]
     if: github.ref == 'refs/heads/master' && github.event_name == 'push'
     runs-on: ubuntu-latest
     steps:

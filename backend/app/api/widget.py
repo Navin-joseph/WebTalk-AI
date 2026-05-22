@@ -17,7 +17,7 @@ from supabase import Client
 
 from ..database import get_supabase
 from ..auth.dependencies import get_client_from_api_key, _hash_key
-from ..models import ChatRequest, ChatResponse
+from ..models import ChatRequest
 
 logger = logging.getLogger("webtalk.widget")
 router = APIRouter(prefix="/widget", tags=["widget"])
@@ -212,7 +212,7 @@ async def widget_chat_stream(
                 except Exception:
                     logger.exception("widget stream: conversation persist failed (non-fatal)")
 
-        except Exception as e:
+        except Exception:
             logger.exception("widget stream FAIL client=%s", client_id)
             err_msg = "I'm having trouble right now. Please try again."
             yield f"data: {json.dumps({'type': 'token', 'text': err_msg})}\n\n"

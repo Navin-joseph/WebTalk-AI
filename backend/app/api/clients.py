@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from supabase import Client
 from ..database import get_supabase
 from ..auth.dependencies import get_current_user
-from ..models import ClientCreate, ClientUpdate, ClientResponse, ApiKeyCreate, ApiKeyResponse, TokenPayload
+from ..models import ClientUpdate, ClientResponse, ApiKeyCreate, ApiKeyResponse, TokenPayload
 
 router = APIRouter(prefix="/clients", tags=["clients"])
 

@@ -1,7 +1,7 @@
 import json
 import time
 import base64
-from fastapi import WebSocket, WebSocketDisconnect, Query
+from fastapi import WebSocket, WebSocketDisconnect
 from supabase import Client
 from ..rag.pipeline import RAGPipeline
 from ..voice.stt import DeepgramSTT

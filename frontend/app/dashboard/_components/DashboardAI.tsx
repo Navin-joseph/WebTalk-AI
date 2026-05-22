@@ -180,7 +180,7 @@ export default function DashboardAI() {
       setStreaming(false);
       speak(final);
     }
-  }, [token, streaming, speak]);
+  }, [token, streaming, speak, messages]);
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -206,7 +206,7 @@ export default function DashboardAI() {
     recognition.onstart = () => setListening(true);
     recognition.onend = () => setListening(false);
     recognition.onerror = () => setListening(false);
-    recognition.onresult = (e: any) => {
+    recognition.onresult = (e: SpeechRecognitionEvent) => {
       const transcript = e.results[0]?.[0]?.transcript;
       if (transcript) sendMessage(transcript);
     };

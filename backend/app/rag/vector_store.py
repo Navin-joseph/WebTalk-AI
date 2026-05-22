@@ -4,10 +4,6 @@ from qdrant_client.models import (
     Distance,
     VectorParams,
     PointStruct,
-    Filter,
-    FieldCondition,
-    MatchValue,
-    SearchRequest,
 )
 from ..database import get_qdrant
 

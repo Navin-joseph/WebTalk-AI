@@ -242,7 +242,7 @@ async def assistant_stream(
                     yield f"data: {json.dumps({'type': 'token', 'text': delta})}\n\n"
 
             yield f"data: {json.dumps({'type': 'done', 'answer': full_answer})}\n\n"
-        except (APIConnectionError, APITimeoutError, RateLimitError, InternalServerError) as e:
+        except (APIConnectionError, APITimeoutError, RateLimitError, InternalServerError):
             err_msg = "I'm having trouble reaching the AI service right now. Please try again in a moment."
             yield f"data: {json.dumps({'type': 'token', 'text': err_msg})}\n\n"
             yield f"data: {json.dumps({'type': 'done', 'answer': err_msg})}\n\n"

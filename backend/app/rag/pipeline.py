@@ -1,4 +1,3 @@
-import asyncio
 import time
 import logging
 from typing import AsyncGenerator
@@ -201,7 +200,7 @@ class RAGPipeline:
             if not full:
                 yield {"type": "token", "text": msg}
                 full = msg
-        except Exception as e:
+        except Exception:
             logger.exception("Groq stream failure client=%s", client_id)
             if not full:
                 yield {"type": "token", "text": _FALLBACK_ANSWER}
