@@ -35,7 +35,20 @@
   }
 
   function setStatus(t) { if (statusEl) statusEl.textContent = t; }
-  function setActive(on) { if (avatarEl) avatarEl.classList.toggle("wtai-av-active", on); }
+  function setActive(on) { /* kept for compat — state now driven by setAvatarState */ }
+
+  const AV_STATES = ["av-idle","av-thinking","av-listening","av-speaking"];
+  function setAvatarState(state) {
+    // state ∈ "idle" | "thinking" | "listening" | "speaking"
+    const ring = document.getElementById("wtai-av-ring");
+    const dot  = document.getElementById("wtai-av-dot");
+    const sub  = document.getElementById("wtai-status");
+    if (!ring) return;
+    AV_STATES.forEach(c => { ring.classList.remove(c); dot && dot.classList.remove(c); sub && sub.classList.remove(c); });
+    ring.classList.add("av-" + state);
+    if (dot)  dot.classList.add("av-" + state);
+    if (sub && state !== "idle") sub.classList.add("av-" + state);
+  }
 
   // ── CSS ─────────────────────────────────────────────────────────────────────
   function injectCSS() {
@@ -119,6 +132,40 @@
 .wtai-foot{text-align:center;padding:5px;font-size:10px;color:#cbd5e1;border-top:1px solid rgba(148,163,184,.08);flex-shrink:0}
 .wtai-foot a{color:${p};text-decoration:none}
 @media(max-width:480px){.wtai-panel{right:8px;left:8px;bottom:8px;width:auto;max-width:none;height:calc(100vh - 88px)}.wtai-launch{right:16px;bottom:16px}}
+
+/* ── Human Avatar header ─────────────────────────────────────────────── */
+.wtai-avhdr{display:flex;flex-direction:column;align-items:center;padding:18px 16px 14px;background:linear-gradient(160deg,${p}18 0%,${a}10 100%);border-bottom:1px solid rgba(148,163,184,.12);flex-shrink:0;position:relative}
+.wtai-hbtns2{position:absolute;top:10px;right:10px;display:flex;gap:2px}
+.wtai-av-ring{width:90px;height:90px;border-radius:50%;padding:3px;background:conic-gradient(${p},${a},${p});animation:wtai-ring-spin 4s linear infinite;flex-shrink:0}
+.wtai-av-ring-inner{width:100%;height:100%;border-radius:50%;overflow:hidden;background:#fff;position:relative}
+.wtai-av-ring.av-idle{background:rgba(148,163,184,.3);animation:none}
+.wtai-av-ring.av-thinking{background:conic-gradient(#3b82f6,#06b6d4,#3b82f6);animation:wtai-ring-spin 2s linear infinite}
+.wtai-av-ring.av-listening{background:conic-gradient(#10b981,#34d399,#10b981);animation:wtai-ring-spin 1.2s linear infinite}
+.wtai-av-ring.av-speaking{background:conic-gradient(${p},${a},${p});animation:wtai-ring-spin .8s linear infinite}
+@keyframes wtai-ring-spin{to{transform:rotate(360deg)}}
+.wtai-av-dot{width:13px;height:13px;border-radius:50%;border:2px solid #fff;position:absolute;bottom:2px;right:2px;background:#94a3b8;transition:background .3s}
+.wtai-av-dot.av-thinking{background:#3b82f6;animation:wtai-dot-pulse 1s ease-in-out infinite}
+.wtai-av-dot.av-listening{background:#10b981;animation:wtai-dot-pulse .8s ease-in-out infinite}
+.wtai-av-dot.av-speaking{background:${p};animation:wtai-dot-pulse .6s ease-in-out infinite}
+@keyframes wtai-dot-pulse{0%,100%{transform:scale(1)}50%{transform:scale(1.4)}}
+.wtai-av-name{font-size:13px;font-weight:700;color:#1e293b;margin-top:8px;letter-spacing:.01em}
+.wtai-av-sub{font-size:11px;color:#94a3b8;margin-top:2px;min-height:14px;transition:color .2s}
+.wtai-av-sub.av-speaking{color:${p};font-weight:600}
+.wtai-av-sub.av-listening{color:#10b981;font-weight:600}
+.wtai-av-sub.av-thinking{color:#3b82f6;font-weight:600}
+
+/* Face SVG animations */
+.wtai-face{width:100%;height:100%;display:block;--lip:0}
+/* Blink: eyelids */
+.wtai-lid-l,.wtai-lid-r{animation:wtai-blink-eye 4s ease-in-out infinite}
+.wtai-lid-r{animation-delay:.05s}
+@keyframes wtai-blink-eye{0%,45%,55%,100%{transform:scaleY(0)}47%,53%{transform:scaleY(1)}}
+/* Head idle sway */
+.wtai-head-grp{transform-origin:50px 50px;animation:wtai-sway 6s ease-in-out infinite}
+@keyframes wtai-sway{0%,100%{transform:rotate(0deg) translateY(0)}25%{transform:rotate(.8deg) translateY(-.5px)}75%{transform:rotate(-.8deg) translateY(.5px)}}
+/* Speaking mouth: lower jaw drops by --lip * 7px */
+.wtai-jaw{transition:transform .05s linear}
+.wtai-mouth-open{transition:d .05s linear,opacity .05s}
 </style>`);
   }
 
@@ -133,6 +180,129 @@
     vol:   `<svg viewBox="0 0 24 24"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/></svg>`,
     mute:  `<svg viewBox="0 0 24 24"><path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z"/></svg>`,
   };
+
+  // ── Human face SVG ───────────────────────────────────────────────────────────
+  // Stylised male avatar: dark hair, beard, warm complexion.
+  // Animated parts:
+  //   .wtai-lid-l / .wtai-lid-r  → eyelid blink (CSS)
+  //   .wtai-head-grp              → subtle idle sway (CSS)
+  //   .wtai-jaw                   → lower jaw drops via JS (--lip CSS var)
+  const FACE_SVG = `<svg class="wtai-face" id="wtai-face-svg" viewBox="0 0 100 100" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <clipPath id="wtai-fc"><circle cx="50" cy="50" r="50"/></clipPath>
+    <radialGradient id="wtai-sg" cx="45%" cy="35%"><stop offset="0%" stop-color="#e8a87c"/><stop offset="100%" stop-color="#c8704a"/></radialGradient>
+    <radialGradient id="wtai-hg" cx="50%" cy="0%"><stop offset="0%" stop-color="#4a2c0a"/><stop offset="100%" stop-color="#1e0d00"/></radialGradient>
+  </defs>
+  <g clip-path="url(#wtai-fc)">
+    <!-- Background -->
+    <rect width="100" height="100" fill="#f0e6d8"/>
+    <g class="wtai-head-grp">
+      <!-- Neck -->
+      <rect x="37" y="82" width="26" height="24" rx="6" fill="url(#wtai-sg)"/>
+      <!-- Shirt -->
+      <path d="M0 100 Q20 85 37 88 L63 88 Q80 85 100 100Z" fill="#c0392b"/>
+      <!-- Collar -->
+      <path d="M37 88 L50 96 L63 88" fill="none" stroke="#fff" stroke-width="2.5"/>
+      <!-- Face base -->
+      <ellipse cx="50" cy="52" rx="29" ry="32" fill="url(#wtai-sg)"/>
+      <!-- Hair -->
+      <ellipse cx="50" cy="24" rx="30" ry="20" fill="url(#wtai-hg)"/>
+      <rect x="20" y="20" width="60" height="22" fill="url(#wtai-hg)"/>
+      <!-- Ear left -->
+      <ellipse cx="21" cy="52" rx="5" ry="7" fill="#c8704a"/>
+      <!-- Ear right -->
+      <ellipse cx="79" cy="52" rx="5" ry="7" fill="#c8704a"/>
+      <!-- Eyebrows -->
+      <path d="M31 38 Q37 35 43 37" stroke="#2d1a0e" stroke-width="2.2" stroke-linecap="round" fill="none"/>
+      <path d="M57 37 Q63 35 69 38" stroke="#2d1a0e" stroke-width="2.2" stroke-linecap="round" fill="none"/>
+      <!-- Eyes - left -->
+      <g>
+        <ellipse cx="37" cy="45" rx="7" ry="5.5" fill="#fff"/>
+        <ellipse cx="37" cy="45" rx="4" ry="4" fill="#3d2007"/>
+        <ellipse cx="37" cy="45" rx="2" ry="2" fill="#0d0500"/>
+        <ellipse cx="38.5" cy="43.5" rx=".9" ry=".9" fill="#fff" opacity=".7"/>
+        <!-- Eyelid -->
+        <ellipse class="wtai-lid-l" cx="37" cy="45" rx="7" ry="5.5" fill="url(#wtai-sg)" transform-origin="37px 45px" style="transform:scaleY(0)"/>
+      </g>
+      <!-- Eyes - right -->
+      <g>
+        <ellipse cx="63" cy="45" rx="7" ry="5.5" fill="#fff"/>
+        <ellipse cx="63" cy="45" rx="4" ry="4" fill="#3d2007"/>
+        <ellipse cx="63" cy="45" rx="2" ry="2" fill="#0d0500"/>
+        <ellipse cx="64.5" cy="43.5" rx=".9" ry=".9" fill="#fff" opacity=".7"/>
+        <!-- Eyelid -->
+        <ellipse class="wtai-lid-r" cx="63" cy="45" rx="7" ry="5.5" fill="url(#wtai-sg)" transform-origin="63px 45px" style="transform:scaleY(0)"/>
+      </g>
+      <!-- Nose -->
+      <path d="M48 50 L46 60 Q50 62 54 60 L52 50" fill="#c26040" opacity=".5"/>
+      <ellipse cx="46.5" cy="60" rx="3" ry="2" fill="#b8583a" opacity=".6"/>
+      <ellipse cx="53.5" cy="60" rx="3" ry="2" fill="#b8583a" opacity=".6"/>
+      <!-- Mouth + jaw (lip sync) -->
+      <g id="wtai-jaw-grp">
+        <!-- Upper lip -->
+        <path d="M40 68 Q45 66 50 67 Q55 66 60 68 Q55 70 50 70 Q45 70 40 68Z" fill="#a0402a"/>
+        <!-- Lower lip + jaw animated -->
+        <g class="wtai-jaw" id="wtai-jaw">
+          <path d="M40 70 Q50 75 60 70 Q55 74 50 75 Q45 74 40 70Z" fill="#b8503a"/>
+          <!-- Teeth (only visible when mouth opens) -->
+          <rect id="wtai-teeth" x="43" y="70" width="14" height="3" rx="1.5" fill="#f0ede8" opacity="0"/>
+        </g>
+      </g>
+      <!-- Beard / stubble -->
+      <path d="M32 70 Q34 80 50 84 Q66 80 68 70 Q60 75 50 76 Q40 75 32 70Z" fill="#1e0d00" opacity=".55"/>
+      <!-- Cheek blush -->
+      <ellipse cx="28" cy="58" rx="6" ry="4" fill="#e07050" opacity=".18"/>
+      <ellipse cx="72" cy="58" rx="6" ry="4" fill="#e07050" opacity=".18"/>
+      <!-- Smile lines (subtle) -->
+      <path d="M41 65 Q39 68 38 72" stroke="#b86040" stroke-width=".8" fill="none" opacity=".4"/>
+      <path d="M59 65 Q61 68 62 72" stroke="#b86040" stroke-width=".8" fill="none" opacity=".4"/>
+    </g>
+  </g>
+</svg>`;
+
+  // ── Lip-sync via Web Audio API ────────────────────────────────────────────────
+  let _lipAudioCtx = null, _lipAnimId = null, _lipAnalyser = null, _lipSource = null;
+
+  function startLipSync(audioEl) {
+    stopLipSync();
+    try {
+      if (!_lipAudioCtx) _lipAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      _lipAnalyser = _lipAudioCtx.createAnalyser();
+      _lipAnalyser.fftSize = 256;
+      _lipAnalyser.smoothingTimeConstant = 0.6;
+      _lipSource = _lipAudioCtx.createMediaElementSource(audioEl);
+      _lipSource.connect(_lipAnalyser);
+      _lipAnalyser.connect(_lipAudioCtx.destination);
+    } catch { return; }   // browser may block — degrade gracefully
+
+    const data = new Uint8Array(_lipAnalyser.frequencyBinCount);
+    const jaw  = document.getElementById("wtai-jaw");
+    const teeth= document.getElementById("wtai-teeth");
+
+    function tick() {
+      _lipAnimId = requestAnimationFrame(tick);
+      _lipAnalyser.getByteFrequencyData(data);
+      // Focus on speech frequencies ~80–2600 Hz (bins 2-30 at 44.1kHz, fftSize 256)
+      let sum = 0;
+      for (let i = 2; i < 30; i++) sum += data[i];
+      const avg = sum / 28;          // 0..255
+      const lip = Math.min(1, avg / 90);  // normalise
+
+      if (jaw) jaw.style.transform = `translateY(${(lip * 8).toFixed(1)}px)`;
+      if (teeth) teeth.style.opacity = (lip * 1.4).toFixed(2);
+    }
+    tick();
+  }
+
+  function stopLipSync() {
+    if (_lipAnimId) { cancelAnimationFrame(_lipAnimId); _lipAnimId = null; }
+    try { if (_lipSource) { _lipSource.disconnect(); _lipSource = null; } } catch {}
+    // Reset jaw
+    const jaw   = document.getElementById("wtai-jaw");
+    const teeth = document.getElementById("wtai-teeth");
+    if (jaw)   jaw.style.transform = "";
+    if (teeth) teeth.style.opacity = "0";
+  }
 
   // ── Build DOM ────────────────────────────────────────────────────────────────
   function buildUI() {
@@ -151,16 +321,19 @@
     panel.className = "wtai-w wtai-panel";
     panel.id = "wtai-panel";
     panel.innerHTML = `
-      <div class="wtai-head">
-        <div class="wtai-av" id="wtai-av">${ICO.bot}</div>
-        <div class="wtai-hinfo">
-          <div class="wtai-hname">${name}</div>
-          <div class="wtai-hstatus" id="wtai-status">Ask about this site</div>
-        </div>
-        <div class="wtai-hbtns">
+      <div class="wtai-avhdr" id="wtai-avhdr">
+        <div class="wtai-hbtns2">
           <button class="wtai-hbtn" id="wtai-mute" title="Toggle voice">${ICO.vol}</button>
           <button class="wtai-hbtn" id="wtai-close" title="Close">${ICO.close}</button>
         </div>
+        <div style="position:relative;display:inline-block">
+          <div class="wtai-av-ring av-idle" id="wtai-av-ring">
+            <div class="wtai-av-ring-inner" id="wtai-av">${FACE_SVG}</div>
+          </div>
+          <div class="wtai-av-dot" id="wtai-av-dot"></div>
+        </div>
+        <div class="wtai-av-name">${name}</div>
+        <div class="wtai-av-sub" id="wtai-status">Ask about this site</div>
       </div>
       <div class="wtai-msgs" id="wtai-msgs"></div>
       <div class="wtai-inrow">
@@ -178,7 +351,7 @@
     sendBtn = document.getElementById("wtai-send");
     micBtn  = document.getElementById("wtai-mic");
     statusEl= document.getElementById("wtai-status");
-    avatarEl= document.getElementById("wtai-av");
+    avatarEl= document.getElementById("wtai-av-ring");   // ring element for state classes
     muteBtn = document.getElementById("wtai-mute");
 
     // Events
@@ -283,6 +456,7 @@
     msgs.push({ role: "assistant", content: "", streaming: true });
     streaming = true;
     setStatus("Thinking…");
+    setAvatarState("thinking");
     setActive(true);
     render();
 
@@ -362,8 +536,11 @@
       }
       streaming = false;
       sendBtn.disabled = !inputEl.value.trim();
-      setStatus(speaking ? "Speaking…" : "Ask about this site");
-      if (!speaking) setActive(false);
+      if (!speaking) {
+        setStatus("Ask about this site");
+        setAvatarState("idle");
+        setActive(false);
+      }
       render();
       // Enqueue any leftover text (last sentence that had no trailing space / entire 1-sentence reply)
       if (ttsOn && ttsPendingText.trim()) {
@@ -424,15 +601,20 @@
       if (ttsQueue.length > 0 && ttsOn) prefetch = _fetchAudio(ttsQueue[0]);
 
       currentAudio = new Audio(url); currentAudioUrl = url;
-      speaking = true; setStatus("Speaking…"); setActive(true);
+      speaking = true;
+      setStatus("Speaking…");
+      setAvatarState("speaking");
+      setActive(true);
 
       await new Promise(resolve => {
+        currentAudio.oncanplay = () => startLipSync(currentAudio);
         currentAudio.onended = () => {
+          stopLipSync();
           URL.revokeObjectURL(url);
           currentAudio = null; currentAudioUrl = null;
           resolve();
         };
-        currentAudio.onerror = () => resolve();
+        currentAudio.onerror = () => { stopLipSync(); resolve(); };
         currentAudio.play().catch(resolve);
       });
     }
@@ -442,7 +624,10 @@
 
     ttsRunning = false;
     if (ttsQueue.length === 0) {
-      speaking = false; setStatus("Ask about this site"); setActive(false);
+      speaking = false;
+      setStatus("Ask about this site");
+      setAvatarState(streaming ? "thinking" : "idle");
+      setActive(false);
     }
   }
 
@@ -450,10 +635,12 @@
     ttsQueue      = [];
     ttsPendingText = "";
     ttsRunning    = false;
+    stopLipSync();
     if (currentAudio)   { currentAudio.pause();              currentAudio    = null; }
     if (currentAudioUrl){ URL.revokeObjectURL(currentAudioUrl); currentAudioUrl = null; }
     speaking = false;
     setStatus("Ask about this site");
+    setAvatarState("idle");
     setActive(false);
   }
 
@@ -472,13 +659,15 @@
     recognition.onstart = () => {
       listening = true;
       if (micBtn) { micBtn.classList.add("on"); micBtn.innerHTML = ICO.micoff; }
-      setStatus("🎙 Listening…");
+      setStatus("Listening…");
+      setAvatarState("listening");
       inputEl.placeholder = "Listening…";
     };
     recognition.onend = () => {
       listening = false;
       if (micBtn) { micBtn.classList.remove("on"); micBtn.innerHTML = ICO.mic; }
       setStatus("Ask about this site");
+      setAvatarState("idle");
       inputEl.placeholder = "Ask anything…";
     };
     recognition.onerror = recognition.onend;
