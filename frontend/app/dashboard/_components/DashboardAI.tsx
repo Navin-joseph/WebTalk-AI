@@ -28,6 +28,7 @@ export default function DashboardAI() {
   const abortRef = useRef<AbortController | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const audioUrlRef = useRef<string | null>(null);
+  const ttsAbortRef = useRef(false);   // set true to cancel mid-queue
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
@@ -50,39 +51,57 @@ export default function DashboardAI() {
   }, [open, messages]);
 
   const stopSpeakingAudio = useCallback(() => {
-    if (audioRef.current) {
-      audioRef.current.pause();
-      audioRef.current = null;
-    }
-    if (audioUrlRef.current) {
-      URL.revokeObjectURL(audioUrlRef.current);
-      audioUrlRef.current = null;
-    }
+    ttsAbortRef.current = true;
+    if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; }
+    if (audioUrlRef.current) { URL.revokeObjectURL(audioUrlRef.current); audioUrlRef.current = null; }
     setSpeaking(false);
   }, []);
 
+  // Split text into sentence-sized chunks so Cartesia processes short pieces fast.
+  // First sentence audio starts playing ~3× sooner than sending the whole block.
   const speak = useCallback(async (text: string) => {
     if (!ttsEnabled || !token) return;
     stopSpeakingAudio();
-    try {
-      const res = await fetch(`${API_URL}/api/v1/conversations/tts`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-        body: JSON.stringify({ text: text.slice(0, 500) }),
-      });
-      if (!res.ok) return;
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      audioUrlRef.current = url;
-      const audio = new Audio(url);
-      audioRef.current = audio;
-      audio.onplay  = () => setSpeaking(true);
-      audio.onended = () => { setSpeaking(false); URL.revokeObjectURL(url); audioRef.current = null; audioUrlRef.current = null; };
-      audio.onerror = () => { setSpeaking(false); };
-      await audio.play();
-    } catch {
-      setSpeaking(false);
+    ttsAbortRef.current = false;
+
+    // Split on sentence boundaries; keep any trailing fragment as last chunk
+    const sentenceRe = /([\s\S]+?[.!?])(?=\s|$)/g;
+    const chunks: string[] = [];
+    let last = 0;
+    let m: RegExpExecArray | null;
+    while ((m = sentenceRe.exec(text)) !== null) {
+      chunks.push(m[1].trim());
+      last = m.index + m[0].length;
     }
+    const tail = text.slice(last).trim();
+    if (tail) chunks.push(tail);
+    if (!chunks.length) chunks.push(text.trim());
+
+    for (const chunk of chunks) {
+      if (ttsAbortRef.current || !ttsEnabled || !chunk) break;
+      try {
+        const res = await fetch(`${API_URL}/api/v1/conversations/tts`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ text: chunk }),
+        });
+        if (!res.ok || ttsAbortRef.current) break;
+        const blob = await res.blob();
+        if (ttsAbortRef.current) break;
+        const url = URL.createObjectURL(blob);
+        audioUrlRef.current = url;
+        const audio = new Audio(url);
+        audioRef.current = audio;
+        setSpeaking(true);
+        await new Promise<void>(resolve => {
+          audio.onended = () => { URL.revokeObjectURL(url); audioRef.current = null; audioUrlRef.current = null; resolve(); };
+          audio.onerror = () => resolve();
+          audio.play().catch(resolve);
+        });
+      } catch { break; }
+    }
+
+    if (!ttsAbortRef.current) setSpeaking(false);
   }, [ttsEnabled, token, stopSpeakingAudio]);
 
   const sendMessage = useCallback(async (text: string) => {

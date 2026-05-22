@@ -16,6 +16,8 @@
   let ttsOn = true, panelOpen = false, sessionId;
   let msgsEl, inputEl, sendBtn, micBtn, statusEl, avatarEl, muteBtn;
   let recognition = null, currentAudio = null, currentAudioUrl = null;
+  // TTS sentence pipeline — lets audio start while text is still streaming
+  let ttsQueue = [], ttsRunning = false, ttsPendingText = "";
 
   // ── Helpers ─────────────────────────────────────────────────────────────────
   function esc(s) {
@@ -285,6 +287,8 @@
     render();
 
     let fullAnswer = "", sources = [];
+    ttsPendingText = "";   // reset sentence accumulator for this turn
+    stopSpeaking();        // cancel any previous TTS
 
     try {
       const res = await fetch(`${cfg.apiUrl}/api/v1/widget/chat/stream`, {
@@ -314,10 +318,19 @@
           try {
             const evt = JSON.parse(raw);
             if (evt.type === "token" && evt.text) {
-              fullAnswer += evt.text;
+              fullAnswer        += evt.text;
+              ttsPendingText    += evt.text;
               const last = msgs[msgs.length - 1];
               if (last) { last.content = fullAnswer; last.streaming = true; }
               render();
+              // Flush any complete sentences to the TTS pipeline immediately.
+              // Pattern: at least 12 chars ending in . ! ? followed by a space
+              // (the trailing space ensures we don't split mid-abbreviation).
+              let m;
+              while ((m = /^([\s\S]{12,}?[.!?])\s+/.exec(ttsPendingText)) !== null) {
+                ttsEnqueue(m[1]);
+                ttsPendingText = ttsPendingText.slice(m[0].length);
+              }
             } else if (evt.type === "sources") {
               sources = evt.sources || [];
             } else if (evt.type === "done") {
@@ -342,45 +355,75 @@
       }
       streaming = false;
       sendBtn.disabled = !inputEl.value.trim();
-      setStatus("Ask about this site");
-      setActive(false);
+      setStatus(speaking ? "Speaking…" : "Ask about this site");
+      if (!speaking) setActive(false);
       render();
-      if (ttsOn && fullAnswer) speakText(fullAnswer);
+      // Enqueue any leftover text (last sentence that had no trailing space / entire 1-sentence reply)
+      if (ttsOn && ttsPendingText.trim()) {
+        ttsEnqueue(ttsPendingText.trim());
+        ttsPendingText = "";
+      }
     }
   }
 
-  // ── Cartesia TTS via backend ─────────────────────────────────────────────────
-  async function speakText(text) {
-    if (!ttsOn) return;
-    stopSpeaking();
-    try {
-      const res = await fetch(`${cfg.apiUrl}/api/v1/widget/tts`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-API-Key": cfg.apiKey },
-        body: JSON.stringify({ text: text.slice(0, 500) }),
-      });
-      if (!res.ok) return;
-      const blob = await res.blob();
-      const url = URL.createObjectURL(blob);
-      currentAudioUrl = url;
-      currentAudio = new Audio(url);
-      currentAudio.onplay  = () => { speaking = true; setStatus("Speaking…"); setActive(true); };
-      currentAudio.onended = () => {
-        speaking = false; setStatus("Ask about this site"); setActive(false);
-        URL.revokeObjectURL(url); currentAudio = null; currentAudioUrl = null;
-      };
-      currentAudio.onerror = () => {
-        speaking = false; setStatus("Ask about this site"); setActive(false);
-      };
-      await currentAudio.play();
-    } catch {
+  // ── Cartesia TTS — sentence-pipelined to minimise first-audio latency ────────
+  //
+  // How it works:
+  //   During SSE streaming, complete sentences are enqueued immediately.
+  //   _ttsDrain() fetches & plays each sentence in order, so Cartesia is called
+  //   on short chunks (fast) and audio starts before the full response is done.
+
+  function ttsEnqueue(text) {
+    const t = (text || "").trim();
+    if (!t || !ttsOn) return;
+    ttsQueue.push(t);
+    _ttsDrain();
+  }
+
+  async function _ttsDrain() {
+    if (ttsRunning) return;           // already draining
+    ttsRunning = true;
+
+    while (ttsQueue.length > 0 && ttsOn) {
+      const chunk = ttsQueue.shift();
+      try {
+        const res = await fetch(`${cfg.apiUrl}/api/v1/widget/tts`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", "X-API-Key": cfg.apiKey },
+          body: JSON.stringify({ text: chunk }),
+        });
+        if (!res.ok || !ttsOn) continue;
+        const blob = await res.blob();
+        if (!ttsOn) break;
+        const url = URL.createObjectURL(blob);
+        currentAudioUrl = url;
+        currentAudio    = new Audio(url);
+        speaking = true; setStatus("Speaking…"); setActive(true);
+        // Wait for this chunk to finish before playing the next one
+        await new Promise(resolve => {
+          currentAudio.onended = () => {
+            URL.revokeObjectURL(url); currentAudio = null; currentAudioUrl = null;
+            resolve();
+          };
+          currentAudio.onerror = () => resolve();
+          currentAudio.play().catch(resolve);
+        });
+      } catch { /* skip failed chunk — carry on with rest of queue */ }
+    }
+
+    ttsRunning = false;
+    // Only reset status if nothing else is queued
+    if (ttsQueue.length === 0) {
       speaking = false; setStatus("Ask about this site"); setActive(false);
     }
   }
 
   function stopSpeaking() {
-    if (currentAudio) { currentAudio.pause(); currentAudio = null; }
-    if (currentAudioUrl) { URL.revokeObjectURL(currentAudioUrl); currentAudioUrl = null; }
+    ttsQueue      = [];
+    ttsPendingText = "";
+    ttsRunning    = false;
+    if (currentAudio)   { currentAudio.pause();              currentAudio    = null; }
+    if (currentAudioUrl){ URL.revokeObjectURL(currentAudioUrl); currentAudioUrl = null; }
     speaking = false;
     setStatus("Ask about this site");
     setActive(false);
