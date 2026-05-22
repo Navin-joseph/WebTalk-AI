@@ -155,17 +155,16 @@
 .wtai-av-sub.av-thinking{color:#3b82f6;font-weight:600}
 
 /* Face SVG animations */
-.wtai-face{width:100%;height:100%;display:block;--lip:0}
-/* Blink: eyelids */
-.wtai-lid-l,.wtai-lid-r{animation:wtai-blink-eye 4s ease-in-out infinite}
-.wtai-lid-r{animation-delay:.05s}
-@keyframes wtai-blink-eye{0%,45%,55%,100%{transform:scaleY(0)}47%,53%{transform:scaleY(1)}}
-/* Head idle sway */
-.wtai-head-grp{transform-origin:50px 50px;animation:wtai-sway 6s ease-in-out infinite}
-@keyframes wtai-sway{0%,100%{transform:rotate(0deg) translateY(0)}25%{transform:rotate(.8deg) translateY(-.5px)}75%{transform:rotate(-.8deg) translateY(.5px)}}
-/* Speaking mouth: lower jaw drops by --lip * 7px */
-.wtai-jaw{transition:transform .05s linear}
-.wtai-mouth-open{transition:d .05s linear,opacity .05s}
+.wtai-face{width:100%;height:100%;display:block}
+/* Blink — transform-box:fill-box makes transform-origin relative to the element itself */
+.wtai-lid-l,.wtai-lid-r{transform-box:fill-box;transform-origin:center top;animation:wtai-blink-eye 3.8s ease-in-out infinite}
+.wtai-lid-r{animation-delay:.06s}
+@keyframes wtai-blink-eye{0%,88%,100%{transform:scaleY(0)}92%,96%{transform:scaleY(1)}}
+/* Head idle sway — transform-box:fill-box for correct pivot on the group */
+.wtai-head-grp{transform-box:fill-box;transform-origin:center bottom;animation:wtai-sway 5s ease-in-out infinite}
+@keyframes wtai-sway{0%,100%{transform:rotate(0deg)}30%{transform:rotate(.7deg)}70%{transform:rotate(-.7deg)}}
+/* Jaw drop for lip sync (driven by JS translateY) */
+.wtai-jaw{transition:transform .04s linear}
 </style>`);
   }
 
@@ -222,7 +221,7 @@
         <ellipse cx="37" cy="45" rx="2" ry="2" fill="#0d0500"/>
         <ellipse cx="38.5" cy="43.5" rx=".9" ry=".9" fill="#fff" opacity=".7"/>
         <!-- Eyelid -->
-        <ellipse class="wtai-lid-l" cx="37" cy="45" rx="7" ry="5.5" fill="url(#wtai-sg)" transform-origin="37px 45px" style="transform:scaleY(0)"/>
+        <ellipse class="wtai-lid-l" cx="37" cy="45" rx="7" ry="5.5" fill="url(#wtai-sg)"/>
       </g>
       <!-- Eyes - right -->
       <g>
@@ -231,7 +230,7 @@
         <ellipse cx="63" cy="45" rx="2" ry="2" fill="#0d0500"/>
         <ellipse cx="64.5" cy="43.5" rx=".9" ry=".9" fill="#fff" opacity=".7"/>
         <!-- Eyelid -->
-        <ellipse class="wtai-lid-r" cx="63" cy="45" rx="7" ry="5.5" fill="url(#wtai-sg)" transform-origin="63px 45px" style="transform:scaleY(0)"/>
+        <ellipse class="wtai-lid-r" cx="63" cy="45" rx="7" ry="5.5" fill="url(#wtai-sg)"/>
       </g>
       <!-- Nose -->
       <path d="M48 50 L46 60 Q50 62 54 60 L52 50" fill="#c26040" opacity=".5"/>
