@@ -389,106 +389,56 @@
   }
 
   /**
-   * Play one TTS chunk.
-   *
-   * Chrome/Edge: uses MediaSource + streaming endpoint → audio starts in ~100 ms
-   *              (first bytes from Cartesia arrive before synthesis is complete).
-   * Firefox/Safari: falls back to one-shot blob → audio starts in ~500 ms.
-   *
-   * Returns a Promise that resolves when playback finishes.
+   * Fetch MP3 audio for `text` from the backend and return a blob URL.
+   * Returns null on any error or if TTS has been turned off.
    */
-  async function _playChunk(text) {
-    const useMS = typeof MediaSource !== "undefined" &&
-                  MediaSource.isTypeSupported("audio/mpeg");
-
-    if (useMS) {
-      return new Promise(resolve => {
-        const ms     = new MediaSource();
-        const objUrl = URL.createObjectURL(ms);
-        const audio  = new Audio(objUrl);
-        currentAudio = audio; currentAudioUrl = objUrl;
-
-        const done = () => {
-          try { URL.revokeObjectURL(objUrl); } catch {}
-          currentAudio = null; currentAudioUrl = null;
-          resolve();
-        };
-        audio.onended = done;
-        audio.onerror = done;
-
-        ms.addEventListener("sourceopen", async () => {
-          let sb;
-          try { sb = ms.addSourceBuffer("audio/mpeg"); }
-          catch { done(); return; }
-
-          // Simple queue to serialise appendBuffer calls
-          const q   = [];
-          let busy  = false;
-          const flush = () => {
-            if (busy || sb.updating || q.length === 0) return;
-            const item = q.shift();
-            if (item === null) { try { ms.endOfStream(); } catch {} return; }
-            busy = true;
-            try { sb.appendBuffer(item); } catch { done(); }
-          };
-          sb.addEventListener("updateend", () => { busy = false; flush(); });
-
-          try {
-            const res = await fetch(`${cfg.apiUrl}/api/v1/widget/tts/stream`, {
-              method: "POST",
-              headers: { "Content-Type": "application/json", "X-API-Key": cfg.apiKey },
-              body: JSON.stringify({ text }),
-            });
-            if (!res.ok || !res.body) { done(); return; }
-
-            const reader  = res.body.getReader();
-            let started   = false;
-
-            while (true) {
-              const { done: eof, value } = await reader.read();
-              q.push(eof ? null : value);
-              flush();
-              if (eof) break;
-              if (!started) {
-                started = true;
-                audio.play().catch(() => {});
-                speaking = true; setStatus("Speaking…"); setActive(true);
-              }
-            }
-          } catch { done(); }
-        });
-      });
-    }
-
-    // ── Fallback: one-shot blob ────────────────────────────────────────────
+  async function _fetchAudio(text) {
     try {
       const res = await fetch(`${cfg.apiUrl}/api/v1/widget/tts`, {
         method: "POST",
         headers: { "Content-Type": "application/json", "X-API-Key": cfg.apiKey },
         body: JSON.stringify({ text }),
       });
-      if (!res.ok || !ttsOn) return;
-      const url = URL.createObjectURL(await res.blob());
-      currentAudio = new Audio(url); currentAudioUrl = url;
-      speaking = true; setStatus("Speaking…"); setActive(true);
-      await new Promise(resolve => {
-        currentAudio.onended = () => {
-          URL.revokeObjectURL(url); currentAudio = null; currentAudioUrl = null; resolve();
-        };
-        currentAudio.onerror = () => resolve();
-        currentAudio.play().catch(resolve);
-      });
-    } catch { /* skip */ }
+      if (!res.ok || !ttsOn) return null;
+      return URL.createObjectURL(await res.blob());
+    } catch { return null; }
   }
 
+  /**
+   * Drain the TTS queue with pre-fetching:
+   * while sentence N is playing, sentence N+1 is already being fetched
+   * so there is zero gap between sentences.
+   */
   async function _ttsDrain() {
     if (ttsRunning) return;
     ttsRunning = true;
 
+    let prefetch = null;
     while (ttsQueue.length > 0 && ttsOn) {
       const chunk = ttsQueue.shift();
-      try { await _playChunk(chunk); } catch { /* skip bad chunk */ }
+      const url   = await (prefetch || _fetchAudio(chunk));
+      prefetch    = null;
+      if (!url || !ttsOn) continue;
+
+      // Start pre-fetching the next sentence while this one plays
+      if (ttsQueue.length > 0 && ttsOn) prefetch = _fetchAudio(ttsQueue[0]);
+
+      currentAudio = new Audio(url); currentAudioUrl = url;
+      speaking = true; setStatus("Speaking…"); setActive(true);
+
+      await new Promise(resolve => {
+        currentAudio.onended = () => {
+          URL.revokeObjectURL(url);
+          currentAudio = null; currentAudioUrl = null;
+          resolve();
+        };
+        currentAudio.onerror = () => resolve();
+        currentAudio.play().catch(resolve);
+      });
     }
+
+    // Cancel any pending pre-fetch that won't be used (TTS was stopped)
+    if (prefetch) prefetch.then(u => { if (u) URL.revokeObjectURL(u); });
 
     ttsRunning = false;
     if (ttsQueue.length === 0) {
