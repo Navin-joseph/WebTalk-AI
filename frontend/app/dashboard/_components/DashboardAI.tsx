@@ -22,7 +22,7 @@ const NUM_WAVE_BARS = 12;
 //   avatar-idle.mp4  : ~3 s loop of you sitting naturally (breathing, blinking)
 //   avatar-talk.mp4  : ~3 s loop of your mouth moving while speaking
 // Set VIDEO_AVATAR = false  →  falls back to photo + canvas lip-sync overlay.
-const VIDEO_AVATAR    = false;
+const VIDEO_AVATAR    = true;
 const AVATAR_IDLE_VID = "/avatar-idle.mp4";
 const AVATAR_TALK_VID = "/avatar-talk.mp4";
 
