@@ -51,6 +51,10 @@ export default function DashboardAI() {
   const lipCtxRef       = useRef<AudioContext | null>(null);
   const lipAnimRef      = useRef<number | null>(null);
   const lipSrcRef       = useRef<MediaElementAudioSourceNode | null>(null);
+  // Canvas mouth animation
+  const mouthCanvasRef  = useRef<HTMLCanvasElement>(null);
+  const smoothAmpRef    = useRef(0);
+  const skinColorRef    = useRef({ r: 188, g: 150, b: 128 });
 
   useEffect(() => { tokenRef.current = token; }, [token]);
   useEffect(() => { ttsEnabledRef.current = ttsEnabled; }, [ttsEnabled]);
@@ -74,14 +78,98 @@ export default function DashboardAI() {
     }
   }, [open, messages]);
 
+  // ── Skin colour sampling (runs once on avatar image load) ───────────────────
+  const sampleSkinColor = useCallback((imgEl: HTMLImageElement) => {
+    try {
+      const W = imgEl.offsetWidth || 380, H = imgEl.offsetHeight || 230;
+      const tmp = document.createElement("canvas");
+      tmp.width = W; tmp.height = H;
+      const tc = tmp.getContext("2d"); if (!tc) return;
+      tc.drawImage(imgEl, 0, 0, W, H);
+      const pts: [number, number][] = [[W*0.31,H*0.64],[W*0.69,H*0.64],[W*0.28,H*0.59],[W*0.72,H*0.59]];
+      let r=0, g=0, b=0, n=0;
+      for (const [x,y] of pts) {
+        try { const px=tc.getImageData(~~x,~~y,1,1).data; if(px[3]>80){r+=px[0];g+=px[1];b+=px[2];n++;} } catch { /* skip */ }
+      }
+      if (n>0) skinColorRef.current = { r:r/n, g:g/n, b:b/n };
+    } catch { /* CORS — keep default */ }
+  }, []);
+
+  // ── Canvas mouth renderer ────────────────────────────────────────────────────
+  const drawMouth = useCallback((openAmt: number) => {
+    const canvas = mouthCanvasRef.current; if (!canvas) return;
+    const ctx = canvas.getContext("2d"); if (!ctx) return;
+    const W=canvas.width, H=canvas.height;
+    ctx.clearRect(0,0,W,H);
+    if (openAmt < 0.02) return;
+
+    const cx=W*0.50, cy=H*0.72, mw=W*0.26, mh=H*0.068;
+    const {r,g,b} = skinColorRef.current;
+    const gap = openAmt * mh * 4;
+
+    // ① Skin-tone erase of original closed lips
+    const sg = ctx.createRadialGradient(cx,cy,0,cx,cy,mw*0.65);
+    sg.addColorStop(0,`rgba(${~~r},${~~g},${~~b},1)`);
+    sg.addColorStop(0.6,`rgba(${~~r},${~~g},${~~b},0.9)`);
+    sg.addColorStop(1,`rgba(${~~r},${~~g},${~~b},0)`);
+    ctx.fillStyle=sg; ctx.beginPath(); ctx.ellipse(cx,cy,mw*0.65,mh*0.52+gap*0.58,0,0,Math.PI*2); ctx.fill();
+
+    // ② Dark oral cavity
+    if (gap > 0.5) {
+      const mg = ctx.createRadialGradient(cx,cy+gap*0.12,0,cx,cy+gap*0.12,mw*0.44);
+      mg.addColorStop(0,"rgba(16,6,6,1)"); mg.addColorStop(0.7,"rgba(32,10,10,0.97)"); mg.addColorStop(1,"rgba(52,16,16,0.18)");
+      ctx.fillStyle=mg; ctx.beginPath(); ctx.ellipse(cx,cy+gap*0.12,mw*0.37,gap*0.52+0.5,0,0,Math.PI*2); ctx.fill();
+      // ③ Teeth
+      if (openAmt > 0.22) {
+        const tw=mw*0.52, th=Math.min(gap*0.36,mh*0.88), ty=cy-th*0.52;
+        const tg=ctx.createLinearGradient(cx,ty,cx,ty+th);
+        tg.addColorStop(0,"rgba(253,250,246,0.94)"); tg.addColorStop(1,"rgba(238,232,222,0.86)");
+        ctx.fillStyle=tg; ctx.beginPath(); ctx.rect(cx-tw/2,ty,tw,th); ctx.fill();
+        ctx.strokeStyle="rgba(195,188,174,0.3)"; ctx.lineWidth=0.7;
+        for(let i=1;i<=3;i++){const tx=cx-tw/2+(tw/4)*i;ctx.beginPath();ctx.moveTo(tx,ty+th*0.06);ctx.lineTo(tx,ty+th*0.88);ctx.stroke();}
+      }
+    }
+    // ④ Upper lip — cupid's bow
+    const ulr=~~(r*0.70),ulg=~~(g*0.56),ulb=~~(b*0.54);
+    const topY=cy-mh*0.5-gap*0.44, ucY=cy-gap*0.38;
+    ctx.fillStyle=`rgba(${ulr},${ulg},${ulb},0.94)`;
+    ctx.beginPath();
+    ctx.moveTo(cx-mw*0.47,ucY+mh*0.1);
+    ctx.bezierCurveTo(cx-mw*0.38,ucY-mh*0.06,cx-mw*0.21,topY+mh*0.03,cx-mw*0.09,topY+mh*0.14);
+    ctx.bezierCurveTo(cx-mw*0.04,topY+mh*0.2,cx+mw*0.04,topY+mh*0.2,cx+mw*0.09,topY+mh*0.14);
+    ctx.bezierCurveTo(cx+mw*0.21,topY+mh*0.03,cx+mw*0.38,ucY-mh*0.06,cx+mw*0.47,ucY+mh*0.1);
+    ctx.bezierCurveTo(cx+mw*0.34,ucY+mh*0.22,cx-mw*0.34,ucY+mh*0.22,cx-mw*0.47,ucY+mh*0.1);
+    ctx.closePath(); ctx.fill();
+    ctx.fillStyle=`rgba(${Math.min(255,ulr+30)},${Math.min(255,ulg+22)},${Math.min(255,ulb+22)},0.30)`;
+    ctx.beginPath(); ctx.ellipse(cx,topY+mh*0.22,mw*0.09,mh*0.045,0,0,Math.PI*2); ctx.fill();
+    // ⑤ Lower lip — fuller
+    const llr=~~(r*0.74),llg=~~(g*0.60),llb=~~(b*0.58);
+    const lcY=cy+gap*0.40, btmY=cy+mh*0.5+gap*0.74;
+    ctx.fillStyle=`rgba(${llr},${llg},${llb},0.94)`;
+    ctx.beginPath();
+    ctx.moveTo(cx-mw*0.47,lcY-mh*0.08);
+    ctx.bezierCurveTo(cx-mw*0.41,lcY+mh*0.11,cx-mw*0.19,btmY-mh*0.04,cx,btmY);
+    ctx.bezierCurveTo(cx+mw*0.19,btmY-mh*0.04,cx+mw*0.41,lcY+mh*0.11,cx+mw*0.47,lcY-mh*0.08);
+    ctx.bezierCurveTo(cx+mw*0.35,lcY-mh*0.13,cx-mw*0.35,lcY-mh*0.13,cx-mw*0.47,lcY-mh*0.08);
+    ctx.closePath(); ctx.fill();
+    ctx.fillStyle=`rgba(${Math.min(255,llr+45)},${Math.min(255,llg+32)},${Math.min(255,llb+32)},0.36)`;
+    ctx.beginPath(); ctx.ellipse(cx,btmY-mh*0.22,mw*0.17,mh*0.065,0,0,Math.PI*2); ctx.fill();
+  }, []);
+
   // ── Lip-sync helpers — drive waveform bars from audio analyser ──────────────
   const startLipSync = useCallback((audioEl: HTMLAudioElement) => {
     stopLipSync();
+    // Size the mouth canvas to its parent on first use
+    const mc = mouthCanvasRef.current;
+    if (mc && mc.width === 0) {
+      const wrap = mc.parentElement;
+      if (wrap) { mc.width = wrap.offsetWidth || 380; mc.height = wrap.offsetHeight || 230; }
+    }
     try {
       if (!lipCtxRef.current) lipCtxRef.current = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
       const analyser = lipCtxRef.current.createAnalyser();
       analyser.fftSize = 256;
-      analyser.smoothingTimeConstant = 0.55;
+      analyser.smoothingTimeConstant = 0.5;
       const src = lipCtxRef.current.createMediaElementSource(audioEl);
       src.connect(analyser);
       analyser.connect(lipCtxRef.current.destination);
@@ -90,21 +178,31 @@ export default function DashboardAI() {
       const tick = () => {
         lipAnimRef.current = requestAnimationFrame(tick);
         analyser.getByteFrequencyData(data);
+        // Waveform bars
         waveBarRefs.current.forEach((bar, i) => {
           if (!bar) return;
           const bin = Math.floor(2 + i * 4);
-          const h = Math.max(3, Math.round((data[bin] / 255) * 24));
-          bar.style.height = h + "px";
+          bar.style.height = Math.max(3, Math.round((data[bin] / 255) * 24)) + "px";
         });
+        // Mouth canvas — RMS of speech-freq range (bins 2–50)
+        let sum = 0;
+        for (let i = 2; i < 50; i++) sum += data[i] * data[i];
+        const rms = Math.sqrt(sum / 48) / 255;
+        const target = rms > smoothAmpRef.current ? rms : smoothAmpRef.current * 0.82;
+        smoothAmpRef.current += (target - smoothAmpRef.current) * 0.25;
+        drawMouth(Math.min(1, smoothAmpRef.current * 3.8));
       };
       tick();
     } catch { /* AudioContext blocked — degrade gracefully */ }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  }, [drawMouth]);
 
   function stopLipSync() {
     if (lipAnimRef.current) { cancelAnimationFrame(lipAnimRef.current); lipAnimRef.current = null; }
     try { if (lipSrcRef.current) { lipSrcRef.current.disconnect(); lipSrcRef.current = null; } } catch {}
+    smoothAmpRef.current = 0;
+    const mc = mouthCanvasRef.current;
+    if (mc) { const c = mc.getContext("2d"); if (c) c.clearRect(0, 0, mc.width, mc.height); }
     waveBarRefs.current.forEach(bar => { if (bar) bar.style.height = "3px"; });
   }
 
@@ -346,6 +444,8 @@ export default function DashboardAI() {
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img
               src={AVATAR_URL} alt="AI Assistant" draggable={false}
+              crossOrigin="anonymous"
+              onLoad={e => sampleSkinColor(e.currentTarget)}
               className="w-full h-full object-cover"
               style={{
                 objectPosition: "center 8%",
@@ -354,6 +454,28 @@ export default function DashboardAI() {
                   : "dash-breathe 5s ease-in-out infinite",
               }}
             />
+            {/* Canvas mouth lip-sync overlay */}
+            <canvas
+              ref={mouthCanvasRef}
+              width={0} height={0}
+              className="absolute inset-0 pointer-events-none"
+              style={{ width: "100%", height: "100%", zIndex: 3 }}
+            />
+            {/* Eye blink overlays */}
+            <div className="absolute pointer-events-none" style={{
+              width:"22%", height:"11%", left:"24%", top:"28%",
+              borderRadius:"0 0 55% 55%/0 0 80% 80%",
+              background:"linear-gradient(to bottom,rgba(18,12,8,0.02) 0%,rgba(18,12,8,0.9) 55%,rgba(18,12,8,0.88) 100%)",
+              transform:"scaleY(0)", transformOrigin:"top center", zIndex:5,
+              animation:"dash-blink 4.5s ease-in-out infinite",
+            }} />
+            <div className="absolute pointer-events-none" style={{
+              width:"22%", height:"11%", left:"54%", top:"28%",
+              borderRadius:"0 0 55% 55%/0 0 80% 80%",
+              background:"linear-gradient(to bottom,rgba(18,12,8,0.02) 0%,rgba(18,12,8,0.9) 55%,rgba(18,12,8,0.88) 100%)",
+              transform:"scaleY(0)", transformOrigin:"top center", zIndex:5,
+              animation:"dash-blink 5.4s ease-in-out infinite",
+            }} />
             {/* State glow border */}
             <div className="absolute inset-0 pointer-events-none transition-all duration-300" style={{
               border: "3px solid transparent",
@@ -532,9 +654,10 @@ export default function DashboardAI() {
       </button>
 
       <style>{`
-        @keyframes dash-breathe   { 0%,100%{transform:scale(1) translateY(0)} 50%{transform:scale(1.008) translateY(-1.5px)} }
-        @keyframes dash-speak-bob { from{transform:scale(1) translateY(0)} to{transform:scale(1.013) translateY(-3px)} }
+        @keyframes dash-breathe   { 0%,100%{transform:scale(1) translateY(0)} 50%{transform:scale(1.009) translateY(-1.5px)} }
+        @keyframes dash-speak-bob { from{transform:scale(1) translateY(0) rotate(0deg)} to{transform:scale(1.014) translateY(-3px) rotate(0.25deg)} }
         @keyframes dash-dot-pulse { 0%,100%{transform:scale(1)} 50%{transform:scale(1.5)} }
+        @keyframes dash-blink     { 0%,93%,100%{transform:scaleY(0)} 95.5%,96.5%{transform:scaleY(1)} 97%{transform:scaleY(0.08)} 98.5%{transform:scaleY(0.92)} }
       `}</style>
     </div>
   );

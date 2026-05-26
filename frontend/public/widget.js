@@ -24,6 +24,10 @@
   let _ttsResolve = null;
   // AbortController for in-flight TTS fetch (cancelled when speaking is stopped)
   let _ttsFetchAbort = null;
+  // ── Mouth canvas lip-sync ──────────────────────────────────────────────────
+  let _mouthCanvas = null, _mouthCtx = null;
+  let _skinColor   = { r: 188, g: 150, b: 128 };   // default; overridden by skin-sample
+  let _smoothMouthAmp = 0;
 
   // ── Helpers ─────────────────────────────────────────────────────────────────
   function esc(s) {
@@ -227,6 +231,12 @@
 .wtai-mic-ov:hover{background:rgba(255,255,255,.28)}
 .wtai-mic-ov.on{background:#ef444480;animation:wtai-dot-pulse 1.2s ease-in-out infinite}
 .wtai-mic-ov svg{width:14px;height:14px;fill:currentColor}
+
+/* ── Eye-blink overlays ────────────────────────────────────────────────── */
+.wtai-blink-eye{position:absolute;width:22%;height:11%;border-radius:0 0 55% 55%/0 0 80% 80%;background:linear-gradient(to bottom,rgba(18,12,8,0.02) 0%,rgba(18,12,8,0.9) 55%,rgba(18,12,8,0.88) 100%);pointer-events:none;z-index:5;transform:scaleY(0);transform-origin:top center;transform-box:fill-box;animation:wtai-blink-eye var(--bdelay,4.5s) ease-in-out infinite}
+#wtai-blink-l{left:24%;top:28%}
+#wtai-blink-r{left:54%;top:28%;--bdelay:5.4s}
+@keyframes wtai-blink-eye{0%,93%,100%{transform:scaleY(0)}95.5%,96.5%{transform:scaleY(1)}97%{transform:scaleY(0.08)}98.5%{transform:scaleY(0.92)}}
 </style>`);
   }
 
@@ -244,37 +254,152 @@
 
   // FACE_SVG removed — widget now uses a real photo (cfg.avatarUrl).
 
-  // ── Lip-sync via Web Audio API → drives waveform bars ───────────────────────
+  // ── Lip-sync via Web Audio API → waveform bars + canvas mouth ───────────────
   let _lipAudioCtx = null, _lipAnimId = null, _lipAnalyser = null, _lipSource = null;
   const NUM_BARS = 12;
 
   function _getBar(i) { return document.getElementById("wtai-wb" + i); }
 
+  /** Initialise mouth canvas — call lazily when panel is first open */
+  function _initMouthCanvas(photoEl) {
+    if (_mouthCanvas) return;
+    const wrap = document.getElementById("wtai-photo-wrap");
+    if (!wrap) return;
+    const W = wrap.offsetWidth  || 380;
+    const H = wrap.offsetHeight || 230;
+    _mouthCanvas = document.getElementById("wtai-mouth-cv");
+    if (!_mouthCanvas) return;
+    _mouthCanvas.width  = W;
+    _mouthCanvas.height = H;
+    _mouthCtx = _mouthCanvas.getContext("2d");
+    _sampleSkinColor(photoEl, W, H);
+  }
+
+  /** Sample average cheek-area colour so the skin-fill matches the photo */
+  function _sampleSkinColor(photoEl, W, H) {
+    try {
+      const tmp = document.createElement("canvas");
+      tmp.width = W; tmp.height = H;
+      const tc = tmp.getContext("2d");
+      tc.drawImage(photoEl, 0, 0, W, H);
+      const pts = [[W*0.31,H*0.64],[W*0.69,H*0.64],[W*0.28,H*0.59],[W*0.72,H*0.59]];
+      let r=0,g=0,b=0,n=0;
+      for (const [x,y] of pts) {
+        try { const px=tc.getImageData(~~x,~~y,1,1).data; if(px[3]>80){r+=px[0];g+=px[1];b+=px[2];n++;} } catch{}
+      }
+      if (n > 0) _skinColor = { r:r/n, g:g/n, b:b/n };
+    } catch {} // CORS-tainted — keep default
+  }
+
+  /** Draw animated mouth at current openAmt (0 = closed, 1 = wide open) */
+  function _drawMouth(openAmt) {
+    if (!_mouthCtx || !_mouthCanvas) return;
+    const W=_mouthCanvas.width, H=_mouthCanvas.height, ctx=_mouthCtx;
+    ctx.clearRect(0,0,W,H);
+    if (openAmt < 0.02) return;
+
+    const cx=W*0.50, cy=H*0.72, mw=W*0.26, mh=H*0.068;
+    const {r,g,b} = _skinColor;
+    const gap = openAmt * mh * 4;   // max opening ≈ 4 × resting lip height
+
+    // ① Skin-tone gradient erases the closed-lip pixels from the photo
+    const sg = ctx.createRadialGradient(cx,cy,0,cx,cy,mw*0.65);
+    sg.addColorStop(0,   `rgba(${~~r},${~~g},${~~b},1)`);
+    sg.addColorStop(0.6, `rgba(${~~r},${~~g},${~~b},0.9)`);
+    sg.addColorStop(1,   `rgba(${~~r},${~~g},${~~b},0)`);
+    ctx.fillStyle=sg; ctx.beginPath();
+    ctx.ellipse(cx,cy, mw*0.65, mh*0.52+gap*0.58, 0,0,Math.PI*2); ctx.fill();
+
+    // ② Inner mouth (dark cavity)
+    if (gap > 0.5) {
+      const mg = ctx.createRadialGradient(cx,cy+gap*0.12,0,cx,cy+gap*0.12,mw*0.44);
+      mg.addColorStop(0,  "rgba(16,6,6,1)");
+      mg.addColorStop(0.7,"rgba(32,10,10,0.97)");
+      mg.addColorStop(1,  "rgba(52,16,16,0.18)");
+      ctx.fillStyle=mg; ctx.beginPath();
+      ctx.ellipse(cx,cy+gap*0.12, mw*0.37, gap*0.52+0.5, 0,0,Math.PI*2); ctx.fill();
+
+      // ③ Teeth (when open enough)
+      if (openAmt > 0.22) {
+        const tw=mw*0.52, th=Math.min(gap*0.36,mh*0.88), ty=cy-th*0.52;
+        const tg=ctx.createLinearGradient(cx,ty,cx,ty+th);
+        tg.addColorStop(0,"rgba(253,250,246,0.94)"); tg.addColorStop(1,"rgba(238,232,222,0.86)");
+        ctx.fillStyle=tg; ctx.beginPath(); ctx.rect(cx-tw/2,ty,tw,th); ctx.fill();
+        ctx.strokeStyle="rgba(195,188,174,0.3)"; ctx.lineWidth=0.7;
+        for(let i=1;i<=3;i++){const tx=cx-tw/2+(tw/4)*i;ctx.beginPath();ctx.moveTo(tx,ty+th*0.06);ctx.lineTo(tx,ty+th*0.88);ctx.stroke();}
+      }
+    }
+
+    // ④ Upper lip — cupid's bow shape
+    const ulr=~~(r*0.70),ulg=~~(g*0.56),ulb=~~(b*0.54);
+    const topY=cy-mh*0.5-gap*0.44, ucY=cy-gap*0.38;
+    ctx.fillStyle=`rgba(${ulr},${ulg},${ulb},0.94)`;
+    ctx.beginPath();
+    ctx.moveTo(cx-mw*0.47, ucY+mh*0.1);
+    ctx.bezierCurveTo(cx-mw*0.38,ucY-mh*0.06, cx-mw*0.21,topY+mh*0.03, cx-mw*0.09,topY+mh*0.14);
+    ctx.bezierCurveTo(cx-mw*0.04,topY+mh*0.2,  cx+mw*0.04,topY+mh*0.2,  cx+mw*0.09,topY+mh*0.14);
+    ctx.bezierCurveTo(cx+mw*0.21,topY+mh*0.03, cx+mw*0.38,ucY-mh*0.06,  cx+mw*0.47,ucY+mh*0.1);
+    ctx.bezierCurveTo(cx+mw*0.34,ucY+mh*0.22,  cx-mw*0.34,ucY+mh*0.22,  cx-mw*0.47,ucY+mh*0.1);
+    ctx.closePath(); ctx.fill();
+    // philtrum highlight
+    ctx.fillStyle=`rgba(${Math.min(255,ulr+30)},${Math.min(255,ulg+22)},${Math.min(255,ulb+22)},0.30)`;
+    ctx.beginPath(); ctx.ellipse(cx,topY+mh*0.22, mw*0.09,mh*0.045, 0,0,Math.PI*2); ctx.fill();
+
+    // ⑤ Lower lip — fuller/shinier
+    const llr=~~(r*0.74),llg=~~(g*0.60),llb=~~(b*0.58);
+    const lcY=cy+gap*0.40, btmY=cy+mh*0.5+gap*0.74;
+    ctx.fillStyle=`rgba(${llr},${llg},${llb},0.94)`;
+    ctx.beginPath();
+    ctx.moveTo(cx-mw*0.47, lcY-mh*0.08);
+    ctx.bezierCurveTo(cx-mw*0.41,lcY+mh*0.11, cx-mw*0.19,btmY-mh*0.04, cx,btmY);
+    ctx.bezierCurveTo(cx+mw*0.19,btmY-mh*0.04, cx+mw*0.41,lcY+mh*0.11, cx+mw*0.47,lcY-mh*0.08);
+    ctx.bezierCurveTo(cx+mw*0.35,lcY-mh*0.13, cx-mw*0.35,lcY-mh*0.13, cx-mw*0.47,lcY-mh*0.08);
+    ctx.closePath(); ctx.fill();
+    // lower lip highlight
+    ctx.fillStyle=`rgba(${Math.min(255,llr+45)},${Math.min(255,llg+32)},${Math.min(255,llb+32)},0.36)`;
+    ctx.beginPath(); ctx.ellipse(cx,btmY-mh*0.22, mw*0.17,mh*0.065, 0,0,Math.PI*2); ctx.fill();
+  }
+
   function startLipSync(audioEl) {
     stopLipSync();
+    // Init mouth canvas (lazy — photo wrap must be visible)
+    const photo = document.getElementById("wtai-photo");
+    if (photo && !_mouthCanvas) _initMouthCanvas(photo);
+
     try {
       if (!_lipAudioCtx) _lipAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
       _lipAnalyser = _lipAudioCtx.createAnalyser();
       _lipAnalyser.fftSize = 256;
-      _lipAnalyser.smoothingTimeConstant = 0.55;
+      _lipAnalyser.smoothingTimeConstant = 0.5;
       _lipSource = _lipAudioCtx.createMediaElementSource(audioEl);
       _lipSource.connect(_lipAnalyser);
       _lipAnalyser.connect(_lipAudioCtx.destination);
-    } catch { return; }   // browser may block — degrade gracefully
+    } catch { return; }
 
     const data = new Uint8Array(_lipAnalyser.frequencyBinCount);
 
     function tick() {
       _lipAnimId = requestAnimationFrame(tick);
       _lipAnalyser.getByteFrequencyData(data);
+
+      // ── Waveform bars ────────────────────────────────────────────────────
       for (let i = 0; i < NUM_BARS; i++) {
         const bar = _getBar(i);
         if (!bar) continue;
-        // Spread across speech-relevant frequency bins (2–50)
         const bin = Math.floor(2 + i * 4);
         const h = Math.max(3, Math.round((data[bin] / 255) * 24));
         bar.style.height = h + "px";
       }
+
+      // ── Mouth canvas ─────────────────────────────────────────────────────
+      // RMS of speech-frequency bins (2–50) as amplitude signal
+      let sum = 0;
+      for (let i = 2; i < 50; i++) sum += data[i] * data[i];
+      const rms = Math.sqrt(sum / 48) / 255;
+      // Smooth: fast attack, slower release for natural feel
+      const target = rms > _smoothMouthAmp ? rms : _smoothMouthAmp * 0.82;
+      _smoothMouthAmp += (target - _smoothMouthAmp) * 0.25;
+      _drawMouth(Math.min(1, _smoothMouthAmp * 3.8));
     }
     tick();
   }
@@ -282,7 +407,8 @@
   function stopLipSync() {
     if (_lipAnimId) { cancelAnimationFrame(_lipAnimId); _lipAnimId = null; }
     try { if (_lipSource) { _lipSource.disconnect(); _lipSource = null; } } catch {}
-    // Reset all bars to resting height
+    _smoothMouthAmp = 0;
+    if (_mouthCtx && _mouthCanvas) _mouthCtx.clearRect(0, 0, _mouthCanvas.width, _mouthCanvas.height);
     for (let i = 0; i < NUM_BARS; i++) {
       const b = _getBar(i); if (b) b.style.height = "3px";
     }
@@ -307,7 +433,10 @@
     const waveBarIds = Array.from({length:12}, (_,i) => `<span id="wtai-wb${i}" style="height:3px"></span>`).join("");
     panel.innerHTML = `
       <div class="wtai-photo-wrap av-idle" id="wtai-photo-wrap">
-        <img class="wtai-photo av-idle" id="wtai-photo" src="${cfg.avatarUrl}" alt="${name}" draggable="false">
+        <img class="wtai-photo av-idle" id="wtai-photo" src="${cfg.avatarUrl}" crossorigin="anonymous" alt="${name}" draggable="false">
+        <canvas id="wtai-mouth-cv" style="position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:3"></canvas>
+        <div class="wtai-blink-eye" id="wtai-blink-l"></div>
+        <div class="wtai-blink-eye" id="wtai-blink-r"></div>
         <div class="wtai-photo-glow" id="wtai-photo-glow"></div>
         <div class="wtai-topbar">
           <div class="wtai-topbar-info">
