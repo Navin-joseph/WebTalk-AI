@@ -85,10 +85,8 @@
       }
     }
 
-    // Mic overlay button class
-    const micOv = document.getElementById("wtai-mic");
-    if (micOv && state === "listening") micOv.classList.add("on");
-    else if (micOv) micOv.classList.remove("on");
+    // Sync both mic buttons — preserve "on" if the user is actively listening
+    _setMicState(state === "listening" || listening);
   }
 
   /** Sync send button appearance: stop (red ×) while streaming, send arrow otherwise */
@@ -682,6 +680,7 @@
       <div class="wtai-msgs" id="wtai-msgs"></div>
       <div class="wtai-inrow">
         <input class="wtai-input" id="wtai-input" type="text" placeholder="Ask anything…" autocomplete="off"/>
+        ${cfg.voiceEnabled ? `<button class="wtai-ibtn wtai-mic" id="wtai-mic-row" title="Voice input">${ICO.mic}</button>` : ""}
         <button class="wtai-ibtn wtai-send" id="wtai-send" disabled title="Send">${ICO.send}</button>
       </div>
       <div class="wtai-foot">Powered by <a href="https://web-talk-ai.vercel.app" target="_blank" rel="noopener">WebTalk AI</a></div>
@@ -707,6 +706,8 @@
     inputEl.addEventListener("keydown", e => { if (e.key === "Enter" && !e.shiftKey && inputEl.value.trim()) send(inputEl.value); });
     inputEl.addEventListener("input",   () => _updateSendBtn());
     if (micBtn) micBtn.onclick = toggleVoice;
+    const micRowBtn = document.getElementById("wtai-mic-row");
+    if (micRowBtn) micRowBtn.onclick = toggleVoice;
     muteBtn.onclick = () => {
       ttsOn = !ttsOn;
       muteBtn.innerHTML = ttsOn ? ICO.vol : ICO.mute;
@@ -1040,36 +1041,81 @@
     setActive(false);
   }
 
+  // ── Mic state helper — updates BOTH the photo-area overlay AND input-row button ──
+  function _setMicState(on) {
+    // Photo-area overlay mic
+    const photoMic = document.getElementById("wtai-mic");
+    if (photoMic) { photoMic.classList.toggle("on", on); photoMic.innerHTML = on ? ICO.micoff : ICO.mic; }
+    // Input-row mic
+    const rowMic = document.getElementById("wtai-mic-row");
+    if (rowMic)   { rowMic.classList.toggle("on",   on); rowMic.innerHTML   = on ? ICO.micoff : ICO.mic; }
+  }
+
   // ── Browser STT (SpeechRecognition) ──────────────────────────────────────────
   function toggleVoice() {
-    if (listening) { recognition?.stop(); return; }
+    // ── Stop if already listening ────────────────────────────────────────────
+    if (listening) {
+      recognition?.stop();
+      listening = false;
+      _setMicState(false);
+      setAvatarState(streaming ? "thinking" : "idle");
+      inputEl.placeholder = "Ask anything…";
+      return;
+    }
 
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-    if (!SR) { alert("Voice input requires Chrome or Edge."); return; }
+    if (!SR) {
+      setStatus("Voice needs Chrome or Edge");
+      setTimeout(() => setStatus("Ask about this site"), 3000);
+      return;
+    }
+
+    // ── Give INSTANT visual feedback before browser asks for mic permission ──
+    listening = true;
+    _setMicState(true);
+    setAvatarState("listening");
+    inputEl.placeholder = "Listening…";
 
     recognition = new SR();
-    recognition.continuous = false;
+    recognition.continuous    = false;
     recognition.interimResults = false;
-    recognition.lang = "en-US";
+    recognition.lang           = "en-US";
 
     recognition.onstart = () => {
+      // Already set above — just confirm
       listening = true;
-      if (micBtn) { micBtn.classList.add("on"); micBtn.innerHTML = ICO.micoff; }
-      setAvatarState("listening");
-      inputEl.placeholder = "Listening…";
+      _setMicState(true);
     };
     recognition.onend = () => {
       listening = false;
-      if (micBtn) { micBtn.classList.remove("on"); micBtn.innerHTML = ICO.mic; }
-      setAvatarState("idle");
+      _setMicState(false);
+      setAvatarState(streaming ? "thinking" : "idle");
       inputEl.placeholder = "Ask anything…";
     };
-    recognition.onerror = recognition.onend;
+    recognition.onerror = (e) => {
+      listening = false;
+      _setMicState(false);
+      setAvatarState("idle");
+      inputEl.placeholder = "Ask anything…";
+      if (e.error === "not-allowed") {
+        setStatus("Mic blocked — allow in browser settings");
+        setTimeout(() => setStatus("Ask about this site"), 4000);
+      }
+    };
     recognition.onresult = e => {
       const t = e.results[0]?.[0]?.transcript;
       if (t) send(t);
     };
-    recognition.start();
+
+    try {
+      recognition.start();
+    } catch {
+      // Failed to start (e.g. already running)
+      listening = false;
+      _setMicState(false);
+      setAvatarState("idle");
+      inputEl.placeholder = "Ask anything…";
+    }
   }
 
   // ── Init ──────────────────────────────────────────────────────────────────────
