@@ -70,18 +70,6 @@ export default function DashboardAI() {
   useEffect(() => { ttsEnabledRef.current = ttsEnabled; }, [ttsEnabled]);
   useEffect(() => { streamingRef.current = streaming; }, [streaming]);
 
-  // ── Sample skin colour from video once it has a first frame ────────────────
-  useEffect(() => {
-    if (!VIDEO_AVATAR) return;
-    const vid = idleVideoRef.current;
-    if (!vid) return;
-    const onReady = () => sampleSkinColor(vid);
-    vid.addEventListener("loadeddata", onReady);
-    // If already loaded (e.g. cached) fire immediately
-    if (vid.readyState >= 2) onReady();
-    return () => vid.removeEventListener("loadeddata", onReady);
-  }, [sampleSkinColor]);
-
   useEffect(() => {
     const supabase = createClient();
     supabase.auth.getSession().then(({ data }) => {
@@ -117,6 +105,17 @@ export default function DashboardAI() {
       if (n>0) skinColorRef.current = { r:r/n, g:g/n, b:b/n };
     } catch { /* CORS — keep default */ }
   }, []);
+
+  // ── Sample skin colour from video once it has a first frame ────────────────
+  useEffect(() => {
+    if (!VIDEO_AVATAR) return;
+    const vid = idleVideoRef.current;
+    if (!vid) return;
+    const onReady = () => sampleSkinColor(vid);
+    vid.addEventListener("loadeddata", onReady);
+    if (vid.readyState >= 2) onReady();
+    return () => vid.removeEventListener("loadeddata", onReady);
+  }, [sampleSkinColor]);
 
   // ── Canvas mouth renderer ────────────────────────────────────────────────────
   const drawMouth = useCallback((openAmt: number) => {
