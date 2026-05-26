@@ -72,8 +72,11 @@ export default function DashboardAI() {
   const skinColorRef   = useRef({ r: 188, g: 150, b: 128 });
 
   // Video refs
-  const idleVideoRef = useRef<HTMLVideoElement>(null);  // idle loop (always present)
-  const didVideoRef  = useRef<HTMLVideoElement>(null);  // D-ID WebRTC stream
+  const idleVideoRef    = useRef<HTMLVideoElement>(null);  // idle loop (always present)
+  const didVideoRef     = useRef<HTMLVideoElement>(null);  // D-ID WebRTC stream
+  // Stable ref to enqueueTTS — avoids forward-reference error in speakDID
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const enqueueTTSRef   = useRef<(text: string) => void>(() => {});
 
   // D-ID WebRTC refs
   const peerRef             = useRef<RTCPeerConnection | null>(null);
@@ -356,12 +359,13 @@ export default function DashboardAI() {
   }, []);
 
   // ── D-ID Streams — send text to speak ───────────────────────────────────────
+  // Uses enqueueTTSRef (not enqueueTTS directly) to avoid forward-reference error.
   const speakDID = useCallback(async (text: string) => {
     if (!text.trim()) return;
 
     // Fallback to Cartesia TTS if D-ID not ready
     if (!didReadyRef.current || !didStreamIdRef.current || !tokenRef.current) {
-      enqueueTTS(text);
+      enqueueTTSRef.current(text);
       return;
     }
 
@@ -377,10 +381,7 @@ export default function DashboardAI() {
     didSpeakEndRef.current = newEnd;
     if (didSpeakTimerRef.current) clearTimeout(didSpeakTimerRef.current);
     didSpeakTimerRef.current = setTimeout(() => {
-      // Only reset to idle if the audio analyser hasn't already done so
-      if (Date.now() >= didSpeakEndRef.current - 200) {
-        _onDIDSpeakDone();
-      }
+      if (Date.now() >= didSpeakEndRef.current - 200) _onDIDSpeakDone();
     }, newEnd - Date.now() + 500);
 
     try {
@@ -395,7 +396,7 @@ export default function DashboardAI() {
       }, tokenRef.current);
     } catch (e) {
       console.warn("[DashboardAI] D-ID speak failed, falling back to TTS:", e);
-      enqueueTTS(text);
+      enqueueTTSRef.current(text);
     }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
@@ -501,6 +502,9 @@ export default function DashboardAI() {
     ttsQRef.current.push(text.trim());
     drainTTS();
   }, [drainTTS]);
+
+  // Keep ref in sync so speakDID can call enqueueTTS without forward-reference
+  useEffect(() => { enqueueTTSRef.current = enqueueTTS; }, [enqueueTTS]);
 
   // ── Chat ─────────────────────────────────────────────────────────────────────
   const sendMessage = useCallback(async (text: string) => {

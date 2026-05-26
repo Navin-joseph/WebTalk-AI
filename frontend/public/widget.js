@@ -28,6 +28,11 @@
   let _mouthCanvas = null, _mouthCtx = null;
   let _skinColor   = { r: 188, g: 150, b: 128 };   // default; overridden by skin-sample
   let _smoothMouthAmp = 0;
+  // ── D-ID Streams state ──────────────────────────────────────────────────────
+  let _didPeer = null, _didStreamId = null, _didSessionId = null;
+  let _didReady = false, _didSpeakEndTime = 0, _didSpeakTimer = null;
+  let _didAudioCtx = null, _didAnimId = null, _didSpeakStarted = false;
+  let _didLastText = "";
 
   // ── Helpers ─────────────────────────────────────────────────────────────────
   function esc(s) {
@@ -431,6 +436,184 @@
     }
   }
 
+  // ── D-ID Streams neural lip-sync ─────────────────────────────────────────────
+
+  async function _initDIDStream() {
+    if (!cfg.didEnabled || !cfg.didSourceUrl) return;
+    if (_didPeer) return;  // already initialised
+
+    try {
+      const res = await fetch(`${cfg.apiUrl}/api/v1/widget/avatar/stream/create`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-API-Key": cfg.apiKey },
+        body: JSON.stringify({
+          source_url: cfg.didSourceUrl,
+          driver_url: "bank://lively",
+          output_resolution: 512,
+          stream_warmup: true,
+          config: { stitch: true, fluent: true, pad_audio: 0.0 },
+        }),
+      });
+      if (!res.ok) { console.warn("[WebTalkAI] D-ID create failed", res.status); return; }
+      const data = await res.json();
+
+      _didStreamId  = data.id;
+      _didSessionId = data.session_id;
+
+      _didPeer = new RTCPeerConnection({ iceServers: data.ice_servers });
+
+      _didPeer.onicecandidate = async (evt) => {
+        if (!evt.candidate || !_didStreamId || !_didSessionId) return;
+        try {
+          await fetch(`${cfg.apiUrl}/api/v1/widget/avatar/stream/${_didStreamId}/ice`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json", "X-API-Key": cfg.apiKey },
+            body: JSON.stringify({
+              candidate:     evt.candidate.candidate,
+              sdpMid:        evt.candidate.sdpMid,
+              sdpMLineIndex: evt.candidate.sdpMLineIndex,
+              session_id:    _didSessionId,
+            }),
+          });
+        } catch {}
+      };
+
+      _didPeer.ontrack = (evt) => {
+        if (!evt.streams?.[0]) return;
+        const didVid = document.getElementById("wtai-did-video");
+        if (didVid) {
+          didVid.srcObject = evt.streams[0];
+          didVid.play().catch(() => {});
+        }
+        _didReady = true;
+        console.log("[WebTalkAI] D-ID Streams ready");
+      };
+
+      _didPeer.onconnectionstatechange = () => {
+        const s = _didPeer?.connectionState;
+        if (s === "failed" || s === "disconnected") {
+          _didReady = false;
+          _didPeer  = null;
+        }
+      };
+
+      // Exchange SDP
+      await _didPeer.setRemoteDescription(new RTCSessionDescription(data.offer));
+      const answer = await _didPeer.createAnswer();
+      await _didPeer.setLocalDescription(answer);
+      await fetch(`${cfg.apiUrl}/api/v1/widget/avatar/stream/${_didStreamId}/sdp`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-API-Key": cfg.apiKey },
+        body: JSON.stringify({ answer: { type: answer.type, sdp: answer.sdp }, session_id: _didSessionId }),
+      });
+    } catch (e) {
+      console.warn("[WebTalkAI] D-ID init failed:", e);
+      _didPeer   = null;
+      _didReady  = false;
+    }
+  }
+
+  /** Send full answer text to D-ID for neural lip-sync; falls back to TTS if not ready. */
+  function _speakDID(text) {
+    if (!_didReady || !_didStreamId || !_didSessionId) {
+      ttsEnqueue(text);
+      return;
+    }
+    if (_didSpeakTimer) { clearTimeout(_didSpeakTimer); _didSpeakTimer = null; }
+    _didLastText     = text;
+    _didSpeakStarted = false;
+
+    // Show D-ID video overlay
+    const didVid = document.getElementById("wtai-did-video");
+    if (didVid) didVid.style.opacity = "1";
+    speaking = true;
+    setAvatarState("speaking");
+
+    fetch(`${cfg.apiUrl}/api/v1/widget/avatar/stream/${_didStreamId}/speak`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-API-Key": cfg.apiKey },
+      body: JSON.stringify({
+        script: {
+          type:      "text",
+          subtitles: false,
+          provider:  { type: cfg.didVoiceProvider, voice_id: cfg.didVoiceId },
+          input:     text,
+        },
+        config:     { fluent: true, pad_audio: 0.0, stitch: true },
+        session_id: _didSessionId,
+      }),
+    }).then(() => {
+      _didSpeakStarted = false;
+      setTimeout(() => _startDIDAudioMonitor(), 400);
+    }).catch(() => _onDIDSpeakDone());
+  }
+
+  function _onDIDSpeakDone() {
+    _stopDIDAudioMonitor();
+    _didSpeakStarted = false;
+    if (_didSpeakTimer) { clearTimeout(_didSpeakTimer); _didSpeakTimer = null; }
+    const didVid = document.getElementById("wtai-did-video");
+    if (didVid) didVid.style.opacity = "0";
+    speaking = false;
+    setAvatarState(streaming ? "thinking" : "idle");
+  }
+
+  function _startDIDAudioMonitor() {
+    _stopDIDAudioMonitor();
+    const didVid = document.getElementById("wtai-did-video");
+    if (!didVid?.srcObject) { _onDIDSpeakDone(); return; }
+
+    try {
+      if (!_didAudioCtx) _didAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const analyser = _didAudioCtx.createAnalyser();
+      analyser.fftSize = 256;
+      analyser.smoothingTimeConstant = 0.4;
+      const source = _didAudioCtx.createMediaStreamSource(didVid.srcObject);
+      source.connect(analyser);
+      const data = new Uint8Array(analyser.frequencyBinCount);
+      let silentFrames = 0, totalFrames = 0;
+
+      // Also drive waveform bars from D-ID audio
+      function tick() {
+        _didAnimId = requestAnimationFrame(tick);
+        analyser.getByteFrequencyData(data);
+        totalFrames++;
+
+        // Waveform bars
+        for (let i = 0; i < NUM_BARS; i++) {
+          const bar = _getBar(i);
+          if (bar) bar.style.height = Math.max(3, Math.round((data[Math.floor(2 + i * 4)] / 255) * 24)) + "px";
+        }
+
+        if (totalFrames < 15) return;  // skip first ~250ms warmup
+
+        const rms = data.reduce((s, v) => s + v * v, 0) / data.length;
+        if (rms < 8) {
+          // Only count silence after we've seen some audio (speech has started)
+          if (_didSpeakStarted) silentFrames++;
+          if (silentFrames >= 35) _onDIDSpeakDone();
+        } else {
+          _didSpeakStarted = true;
+          silentFrames = 0;
+        }
+      }
+      tick();
+    } catch {
+      // Fallback timer: estimate duration from word count
+      const ms = Math.max(3000, (_didLastText.split(" ").length || 10) * 320);
+      _didSpeakTimer = setTimeout(_onDIDSpeakDone, ms);
+    }
+  }
+
+  function _stopDIDAudioMonitor() {
+    if (_didAnimId) { cancelAnimationFrame(_didAnimId); _didAnimId = null; }
+    try { if (_didAudioCtx) { _didAudioCtx.close(); } } catch {}
+    _didAudioCtx = null;
+    for (let i = 0; i < NUM_BARS; i++) {
+      const b = _getBar(i); if (b) b.style.height = "3px";
+    }
+  }
+
   // ── Build DOM ────────────────────────────────────────────────────────────────
   function buildUI() {
     const root = document.body || document.documentElement;
@@ -452,16 +635,23 @@
     //   VIDEO MODE  → single idle <video> loop + canvas lip-sync overlay (audio-driven)
     //   PHOTO MODE  → <img> + canvas mouth overlay + CSS blink eyes (fallback)
     const useVid = !!(cfg.avatarIdleVideo || cfg.avatarTalkVideo);
+    // D-ID overlay video (shown when D-ID is speaking, hidden otherwise)
+    const didVideoEl = cfg.didEnabled ? `
+        <video id="wtai-did-video" class="wtai-photo-talk" autoplay playsinline
+          style="opacity:0;transition:opacity .35s cubic-bezier(.4,0,.2,1);z-index:4;pointer-events:none"></video>
+    ` : "";
     const avatarMedia = useVid ? `
         <video id="wtai-photo" class="wtai-photo av-idle" autoplay loop muted playsinline crossorigin="anonymous"
           style="animation:wtai-breathe 5s ease-in-out infinite">
           <source src="${cfg.avatarIdleVideo || cfg.avatarTalkVideo}" type="video/mp4">
         </video>
+        ${didVideoEl}
         <canvas id="wtai-mouth-cv" style="position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:3"></canvas>
         <div class="wtai-blink-eye" id="wtai-blink-l"></div>
         <div class="wtai-blink-eye" id="wtai-blink-r"></div>
     ` : `
         <img class="wtai-photo wtai-photo-static av-idle" id="wtai-photo" src="${cfg.avatarUrl}" crossorigin="anonymous" alt="${name}" draggable="false">
+        ${didVideoEl}
         <canvas id="wtai-mouth-cv" style="position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:3"></canvas>
         <div class="wtai-blink-eye" id="wtai-blink-l"></div>
         <div class="wtai-blink-eye" id="wtai-blink-r"></div>
@@ -593,11 +783,24 @@
       launcher.style.background = "#334155";
       launcher.innerHTML = ICO.close;
       setTimeout(() => inputEl?.focus(), 80);
+      // Warm up D-ID Streams WebRTC session in the background
+      if (cfg.didEnabled && cfg.didSourceUrl) _initDIDStream();
     } else {
       const { p, a } = cfg.theme;
       launcher.style.background = `linear-gradient(135deg,${p},${a})`;
       launcher.innerHTML = ICO.chat;
       stopSpeaking();
+      // Tear down D-ID session to free resources
+      if (_didPeer) {
+        if (_didStreamId && _didSessionId) {
+          fetch(`${cfg.apiUrl}/api/v1/widget/avatar/stream/${_didStreamId}`, {
+            method: "DELETE",
+            headers: { "X-API-Key": cfg.apiKey },
+          }).catch(() => {});
+        }
+        try { _didPeer.close(); } catch {}
+        _didPeer = null; _didStreamId = null; _didSessionId = null; _didReady = false;
+      }
     }
   }
 
@@ -665,18 +868,21 @@
               const last = msgs[msgs.length - 1];
               if (last) { last.content = fullAnswer; last.streaming = true; }
               render();
-              // Flush at sentence boundary as soon as we have ≥4 chars
-              let m;
-              while ((m = /^([\s\S]{4,}?[.!?])\s+/.exec(ttsPendingText)) !== null) {
-                ttsEnqueue(m[1]);
-                ttsPendingText = ttsPendingText.slice(m[0].length);
-              }
-              // Force-flush at word boundary after 38 chars — shorter chunks = faster Cartesia synthesis
-              if (ttsPendingText.length > 38) {
-                const cut = ttsPendingText.lastIndexOf(" ", 30);
-                if (cut > 8) {
-                  ttsEnqueue(ttsPendingText.slice(0, cut));
-                  ttsPendingText = ttsPendingText.slice(cut + 1);
+              // When D-ID is active, skip per-sentence TTS — full answer is sent to D-ID at the end
+              if (!cfg.didEnabled || !_didReady) {
+                // Flush at sentence boundary as soon as we have ≥4 chars
+                let m;
+                while ((m = /^([\s\S]{4,}?[.!?])\s+/.exec(ttsPendingText)) !== null) {
+                  ttsEnqueue(m[1]);
+                  ttsPendingText = ttsPendingText.slice(m[0].length);
+                }
+                // Force-flush at word boundary after 38 chars — shorter chunks = faster Cartesia synthesis
+                if (ttsPendingText.length > 38) {
+                  const cut = ttsPendingText.lastIndexOf(" ", 30);
+                  if (cut > 8) {
+                    ttsEnqueue(ttsPendingText.slice(0, cut));
+                    ttsPendingText = ttsPendingText.slice(cut + 1);
+                  }
                 }
               }
             } else if (evt.type === "sources") {
@@ -706,8 +912,13 @@
       _updateSendBtn();
       if (!speaking) setAvatarState("idle");
       render();
-      // Enqueue any leftover sentence fragment
-      if (ttsOn && ttsPendingText.trim()) {
+      // Speak the completed answer
+      if (cfg.didEnabled && _didReady) {
+        // D-ID neural lip-sync: send full answer at once for best quality
+        if (fullAnswer.trim()) _speakDID(fullAnswer.trim());
+        ttsPendingText = "";
+      } else if (ttsOn && ttsPendingText.trim()) {
+        // Cartesia TTS: enqueue any leftover sentence fragment
         ttsEnqueue(ttsPendingText.trim());
         ttsPendingText = "";
       }
@@ -817,6 +1028,12 @@
     if (_ttsFetchAbort) { _ttsFetchAbort.abort(); _ttsFetchAbort = null; }
     if (currentAudio)   { currentAudio.pause();              currentAudio    = null; }
     if (currentAudioUrl){ URL.revokeObjectURL(currentAudioUrl); currentAudioUrl = null; }
+    // Cancel any D-ID speak
+    _stopDIDAudioMonitor();
+    if (_didSpeakTimer) { clearTimeout(_didSpeakTimer); _didSpeakTimer = null; }
+    _didSpeakStarted = false;
+    const didVid = document.getElementById("wtai-did-video");
+    if (didVid) didVid.style.opacity = "0";
     speaking = false;
     setStatus("Ask about this site");
     setAvatarState("idle");
@@ -879,8 +1096,16 @@
       // avatarIdleVideo : short ~3s loop of person sitting naturally (breathing, blinking)
       // avatarTalkVideo : short ~3s loop of person's mouth moving while speaking
       // Leave null → falls back to photo + canvas lip-sync overlay.
-      avatarIdleVideo: options.avatarIdleVideo || null,
-      avatarTalkVideo: options.avatarTalkVideo || null,
+      avatarIdleVideo:  options.avatarIdleVideo || null,
+      avatarTalkVideo:  options.avatarTalkVideo || null,
+      // D-ID Streams neural lip-sync (requires backend DID_API_KEY + a public avatar image URL)
+      // didEnabled    : true to enable D-ID Streams (overrides TTS + canvas mouth)
+      // didSourceUrl  : publicly accessible URL of the avatar image, e.g. "https://yoursite.com/avatar.jpg"
+      // didVoiceProvider / didVoiceId : D-ID voice settings (default: Microsoft Neural Jenny)
+      didEnabled:       !!(options.didEnabled && options.didSourceUrl),
+      didSourceUrl:     options.didSourceUrl   || "",
+      didVoiceProvider: options.didVoiceProvider || "microsoft",
+      didVoiceId:       options.didVoiceId       || "en-US-JennyNeural",
     };
     sessionId = sid();
     ttsOn = options.ttsAutoPlay !== false;
