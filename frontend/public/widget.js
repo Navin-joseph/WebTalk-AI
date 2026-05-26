@@ -69,7 +69,22 @@
     }
     if (sub) sub.textContent = STATUS_TEXT[state] || "";
 
-    // Also update the mic overlay button class
+    // ── Video mode: crossfade idle ↔ talk video ─────────────────────────────
+    const talkVid = document.getElementById("wtai-vid-talk");
+    if (talkVid && photo) {
+      if (state === "speaking") {
+        photo.style.opacity = "0";           // fade idle video out
+        talkVid.style.opacity = "1";         // fade talk video in
+      } else if (state === "listening") {
+        photo.style.opacity = "0.65";        // dim idle video slightly
+        talkVid.style.opacity = "0";
+      } else {
+        photo.style.opacity = "1";           // idle / thinking: full idle video
+        talkVid.style.opacity = "0";
+      }
+    }
+
+    // Mic overlay button class
     const micOv = document.getElementById("wtai-mic");
     if (micOv && state === "listening") micOv.classList.add("on");
     else if (micOv) micOv.classList.remove("on");
@@ -192,13 +207,19 @@
 .wtai-foot a{color:${p};text-decoration:none}
 @media(max-width:480px){.wtai-panel{right:8px;left:8px;bottom:8px;width:auto;max-width:none;height:calc(100vh - 88px)}.wtai-launch{right:16px;bottom:16px}}
 
-/* ── Grace-style photo header ─────────────────────────────────────────── */
+/* ── Grace-style photo/video header ─────────────────────────────────────── */
 .wtai-photo-wrap{position:relative;width:100%;height:230px;overflow:hidden;background:#111827;flex-shrink:0}
-.wtai-photo{width:100%;height:100%;object-fit:cover;object-position:center 8%;display:block;transition:transform .15s ease}
-.wtai-photo.av-idle{animation:wtai-breathe 5s ease-in-out infinite}
-@keyframes wtai-breathe{0%,100%{transform:scale(1) translateY(0)}50%{transform:scale(1.008) translateY(-1.5px)}}
-.wtai-photo.av-speaking{animation:wtai-speak-bob .38s ease-in-out infinite alternate}
-@keyframes wtai-speak-bob{from{transform:scale(1) translateY(0)}to{transform:scale(1.013) translateY(-3px)}}
+/* Both <img> and <video> share base styles */
+.wtai-photo{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:center 8%;display:block;transition:opacity .45s cubic-bezier(.4,0,.2,1),transform .15s ease}
+/* Talking-video layer — z-index 2, hidden until speaking */
+.wtai-photo-talk{position:absolute;inset:0;width:100%;height:100%;object-fit:cover;object-position:center 8%;display:block;opacity:0;transition:opacity .35s cubic-bezier(.4,0,.2,1);z-index:2;pointer-events:none}
+/* Idle / speaking animations (photo fallback only; videos move naturally) */
+.wtai-photo-static.av-idle{animation:wtai-breathe 5s ease-in-out infinite}
+@keyframes wtai-breathe{0%,100%{transform:scale(1) translateY(0)}50%{transform:scale(1.009) translateY(-1.5px)}}
+.wtai-photo-static.av-speaking{animation:wtai-speak-bob .42s ease-in-out infinite alternate}
+@keyframes wtai-speak-bob{from{transform:scale(1.001) translateY(0) rotate(0deg)}to{transform:scale(1.013) translateY(-3px) rotate(0.2deg)}}
+.wtai-photo-static.av-listening{animation:wtai-listen-pulse 1.2s ease-in-out infinite}
+@keyframes wtai-listen-pulse{0%,100%{transform:scale(1)}50%{transform:scale(1.005)}}
 /* State glow inset border */
 .wtai-photo-glow{position:absolute;inset:0;pointer-events:none;transition:box-shadow .35s,border .35s;border:3px solid transparent}
 .wtai-photo-glow.av-thinking{border-color:rgba(59,130,246,.55);box-shadow:inset 0 0 30px rgba(59,130,246,.25)}
@@ -431,12 +452,26 @@
     panel.className = "wtai-w wtai-panel";
     panel.id = "wtai-panel";
     const waveBarIds = Array.from({length:12}, (_,i) => `<span id="wtai-wb${i}" style="height:3px"></span>`).join("");
-    panel.innerHTML = `
-      <div class="wtai-photo-wrap av-idle" id="wtai-photo-wrap">
-        <img class="wtai-photo av-idle" id="wtai-photo" src="${cfg.avatarUrl}" crossorigin="anonymous" alt="${name}" draggable="false">
+    // Decide avatar rendering mode:
+    //   VIDEO MODE  → two <video> loops (idle + talk) crossfaded on state change
+    //   PHOTO MODE  → <img> + canvas mouth overlay + CSS blink eyes (fallback)
+    const useVid = !!(cfg.avatarIdleVideo || cfg.avatarTalkVideo);
+    const avatarMedia = useVid ? `
+        <video id="wtai-photo" class="wtai-photo av-idle" autoplay loop muted playsinline>
+          <source src="${cfg.avatarIdleVideo || cfg.avatarTalkVideo}" type="video/mp4">
+        </video>
+        ${cfg.avatarTalkVideo ? `<video id="wtai-vid-talk" class="wtai-photo-talk" autoplay loop muted playsinline>
+          <source src="${cfg.avatarTalkVideo}" type="video/mp4">
+        </video>` : ""}
+    ` : `
+        <img class="wtai-photo wtai-photo-static av-idle" id="wtai-photo" src="${cfg.avatarUrl}" crossorigin="anonymous" alt="${name}" draggable="false">
         <canvas id="wtai-mouth-cv" style="position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:3"></canvas>
         <div class="wtai-blink-eye" id="wtai-blink-l"></div>
         <div class="wtai-blink-eye" id="wtai-blink-r"></div>
+    `;
+    panel.innerHTML = `
+      <div class="wtai-photo-wrap av-idle" id="wtai-photo-wrap">
+        ${avatarMedia}
         <div class="wtai-photo-glow" id="wtai-photo-glow"></div>
         <div class="wtai-topbar">
           <div class="wtai-topbar-info">
@@ -843,6 +878,12 @@
           return src ? new URL("avatar.jpg", src).href : (DEFAULT_API + "/avatar.jpg");
         } catch { return DEFAULT_API + "/avatar.jpg"; }
       })(),
+      // Optional video loops — set these for Grace-style realistic animation.
+      // avatarIdleVideo : short ~3s loop of person sitting naturally (breathing, blinking)
+      // avatarTalkVideo : short ~3s loop of person's mouth moving while speaking
+      // Leave null → falls back to photo + canvas lip-sync overlay.
+      avatarIdleVideo: options.avatarIdleVideo || null,
+      avatarTalkVideo: options.avatarTalkVideo || null,
     };
     sessionId = sid();
     ttsOn = options.ttsAutoPlay !== false;
