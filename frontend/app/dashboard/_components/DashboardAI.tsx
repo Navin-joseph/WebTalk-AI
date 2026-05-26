@@ -2,7 +2,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { createClient } from "@/lib/supabase";
 import { Mic, MicOff, X, Send, Volume2, VolumeX, RotateCcw, MessageSquare } from "lucide-react";
-// Avatar photo — place your photo at frontend/public/avatar.jpg
+import { api } from "@/lib/api";
 
 interface Message {
   role: "user" | "assistant";
@@ -17,13 +17,20 @@ const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 const AVATAR_URL = "/avatar.jpg";
 const NUM_WAVE_BARS = 12;
 
-// ── Video-loop avatar (Grace-style) ───────────────────────────────────────────
-// Place your video files in /public/ and set VIDEO_AVATAR = true to enable.
-//   avatar-idle.mp4  : ~3 s loop of you sitting naturally (breathing, blinking)
-//   avatar-talk.mp4  : ~3 s loop of your mouth moving while speaking
-// Set VIDEO_AVATAR = false  →  falls back to photo + canvas lip-sync overlay.
+// ── Avatar mode ────────────────────────────────────────────────────────────────
+// VIDEO_AVATAR = true  → D-ID Streams neural lip-sync (Grace-style)
+//                        Requires NEXT_PUBLIC_DID_SOURCE_URL env var pointing to
+//                        a publicly accessible image of the avatar (e.g. your
+//                        deployed Vercel URL + /avatar.jpg).
+// VIDEO_AVATAR = false → static photo + canvas bezier mouth overlay (fallback)
 const VIDEO_AVATAR    = true;
 const AVATAR_IDLE_VID = "/avatar-idle.mp4";
+
+// D-ID config — set NEXT_PUBLIC_DID_SOURCE_URL in your Vercel environment variables
+// e.g. https://web-talk-ai.vercel.app/avatar.jpg
+const DID_SOURCE_URL     = process.env.NEXT_PUBLIC_DID_SOURCE_URL ?? "";
+const DID_VOICE_PROVIDER = process.env.NEXT_PUBLIC_DID_VOICE_PROVIDER ?? "microsoft";
+const DID_VOICE_ID       = process.env.NEXT_PUBLIC_DID_VOICE_ID       ?? "en-US-JennyNeural";
 
 export default function DashboardAI() {
   const [open, setOpen]               = useState(false);
@@ -35,6 +42,7 @@ export default function DashboardAI() {
   const [avatarState, setAvatarState] = useState<AvatarState>("idle");
   const [token, setToken]             = useState("");
   const [ttsEnabled, setTtsEnabled]   = useState(true);
+  const [didSpeaking, setDidSpeaking] = useState(false);   // D-ID video visible
 
   const sessionId      = useRef(`dash_${Date.now()}_${Math.random().toString(36).slice(2)}`);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -43,7 +51,7 @@ export default function DashboardAI() {
   const abortRef       = useRef<AbortController | null>(null);
   const inputRef       = useRef<HTMLInputElement>(null);
 
-  // TTS refs
+  // TTS refs (used when D-ID is not ready / VIDEO_AVATAR = false)
   const audioRef        = useRef<HTMLAudioElement | null>(null);
   const audioUrlRef     = useRef<string | null>(null);
   const ttsAbortRef     = useRef(false);
@@ -52,19 +60,32 @@ export default function DashboardAI() {
   const ttsPendingRef   = useRef("");
   const tokenRef        = useRef(token);
   const ttsEnabledRef   = useRef(ttsEnabled);
-  const streamingRef    = useRef(false);   // mirror for async callbacks
+  const streamingRef    = useRef(false);
 
-  // Waveform bar refs (for lip sync visualiser)
-  const waveBarRefs     = useRef<(HTMLSpanElement | null)[]>(Array(NUM_WAVE_BARS).fill(null));
-  const lipCtxRef       = useRef<AudioContext | null>(null);
-  const lipAnimRef      = useRef<number | null>(null);
-  const lipSrcRef       = useRef<MediaElementAudioSourceNode | null>(null);
-  // Canvas mouth animation
-  const mouthCanvasRef  = useRef<HTMLCanvasElement>(null);
-  const smoothAmpRef    = useRef(0);
-  const skinColorRef    = useRef({ r: 188, g: 150, b: 128 });
-  // Video avatar ref (idle loop)
-  const idleVideoRef    = useRef<HTMLVideoElement>(null);
+  // Waveform bars + canvas lip-sync (photo mode / TTS fallback)
+  const waveBarRefs    = useRef<(HTMLSpanElement | null)[]>(Array(NUM_WAVE_BARS).fill(null));
+  const lipCtxRef      = useRef<AudioContext | null>(null);
+  const lipAnimRef     = useRef<number | null>(null);
+  const lipSrcRef      = useRef<MediaElementAudioSourceNode | null>(null);
+  const mouthCanvasRef = useRef<HTMLCanvasElement>(null);
+  const smoothAmpRef   = useRef(0);
+  const skinColorRef   = useRef({ r: 188, g: 150, b: 128 });
+
+  // Video refs
+  const idleVideoRef = useRef<HTMLVideoElement>(null);  // idle loop (always present)
+  const didVideoRef  = useRef<HTMLVideoElement>(null);  // D-ID WebRTC stream
+
+  // D-ID WebRTC refs
+  const peerRef             = useRef<RTCPeerConnection | null>(null);
+  const didStreamIdRef      = useRef<string | null>(null);
+  const didSessionIdRef     = useRef<string | null>(null);
+  const didReadyRef         = useRef(false);   // WebRTC connected, video flowing
+  const didSpeakEndRef      = useRef(0);       // epoch ms when last queued sentence ends
+  const didSpeakTimerRef    = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const didAudioCtxRef      = useRef<AudioContext | null>(null);
+  const didAnalyserRef      = useRef<AnalyserNode | null>(null);
+  const didAnimRef          = useRef<number | null>(null);
+  const didSpeakStartedRef  = useRef(false);   // audio has started after a speak call
 
   useEffect(() => { tokenRef.current = token; }, [token]);
   useEffect(() => { ttsEnabledRef.current = ttsEnabled; }, [ttsEnabled]);
@@ -88,7 +109,7 @@ export default function DashboardAI() {
     }
   }, [open, messages]);
 
-  // ── Skin colour sampling (runs once on avatar image/video load) ─────────────
+  // ── Skin colour sampling (photo fallback) ───────────────────────────────────
   const sampleSkinColor = useCallback((imgEl: HTMLImageElement | HTMLVideoElement) => {
     try {
       const W = (imgEl as HTMLImageElement).offsetWidth  || (imgEl as HTMLVideoElement).videoWidth  || 380;
@@ -106,18 +127,16 @@ export default function DashboardAI() {
     } catch { /* CORS — keep default */ }
   }, []);
 
-  // ── Sample skin colour from video once it has a first frame ────────────────
+  // Sample skin from idle video once first frame available (photo fallback mode)
   useEffect(() => {
-    if (!VIDEO_AVATAR) return;
-    const vid = idleVideoRef.current;
-    if (!vid) return;
-    const onReady = () => sampleSkinColor(vid);
-    vid.addEventListener("loadeddata", onReady);
-    if (vid.readyState >= 2) onReady();
-    return () => vid.removeEventListener("loadeddata", onReady);
+    if (VIDEO_AVATAR) return;   // D-ID mode — no canvas needed
+    const img = document.getElementById("dash-avatar-img") as HTMLImageElement | null;
+    if (!img) return;
+    if (img.complete) sampleSkinColor(img);
+    else img.addEventListener("load", () => sampleSkinColor(img), { once: true });
   }, [sampleSkinColor]);
 
-  // ── Canvas mouth renderer ────────────────────────────────────────────────────
+  // ── Canvas mouth renderer (photo fallback) ──────────────────────────────────
   const drawMouth = useCallback((openAmt: number) => {
     const canvas = mouthCanvasRef.current; if (!canvas) return;
     const ctx = canvas.getContext("2d"); if (!ctx) return;
@@ -125,23 +144,21 @@ export default function DashboardAI() {
     ctx.clearRect(0,0,W,H);
     if (openAmt < 0.02) return;
 
-    const cx=W*0.50, cy=H*0.72, mw=W*0.26, mh=H*0.068;
+    // cy = 0.80 gives better mouth position for typical head-shot crops
+    const cx=W*0.50, cy=H*0.80, mw=W*0.26, mh=H*0.068;
     const {r,g,b} = skinColorRef.current;
     const gap = openAmt * mh * 4;
 
-    // ① Skin-tone erase of original closed lips
     const sg = ctx.createRadialGradient(cx,cy,0,cx,cy,mw*0.65);
     sg.addColorStop(0,`rgba(${~~r},${~~g},${~~b},1)`);
     sg.addColorStop(0.6,`rgba(${~~r},${~~g},${~~b},0.9)`);
     sg.addColorStop(1,`rgba(${~~r},${~~g},${~~b},0)`);
     ctx.fillStyle=sg; ctx.beginPath(); ctx.ellipse(cx,cy,mw*0.65,mh*0.52+gap*0.58,0,0,Math.PI*2); ctx.fill();
 
-    // ② Dark oral cavity
     if (gap > 0.5) {
       const mg = ctx.createRadialGradient(cx,cy+gap*0.12,0,cx,cy+gap*0.12,mw*0.44);
       mg.addColorStop(0,"rgba(16,6,6,1)"); mg.addColorStop(0.7,"rgba(32,10,10,0.97)"); mg.addColorStop(1,"rgba(52,16,16,0.18)");
       ctx.fillStyle=mg; ctx.beginPath(); ctx.ellipse(cx,cy+gap*0.12,mw*0.37,gap*0.52+0.5,0,0,Math.PI*2); ctx.fill();
-      // ③ Teeth
       if (openAmt > 0.22) {
         const tw=mw*0.52, th=Math.min(gap*0.36,mh*0.88), ty=cy-th*0.52;
         const tg=ctx.createLinearGradient(cx,ty,cx,ty+th);
@@ -151,7 +168,6 @@ export default function DashboardAI() {
         for(let i=1;i<=3;i++){const tx=cx-tw/2+(tw/4)*i;ctx.beginPath();ctx.moveTo(tx,ty+th*0.06);ctx.lineTo(tx,ty+th*0.88);ctx.stroke();}
       }
     }
-    // ④ Upper lip — cupid's bow
     const ulr=~~(r*0.70),ulg=~~(g*0.56),ulb=~~(b*0.54);
     const topY=cy-mh*0.5-gap*0.44, ucY=cy-gap*0.38;
     ctx.fillStyle=`rgba(${ulr},${ulg},${ulb},0.94)`;
@@ -164,7 +180,6 @@ export default function DashboardAI() {
     ctx.closePath(); ctx.fill();
     ctx.fillStyle=`rgba(${Math.min(255,ulr+30)},${Math.min(255,ulg+22)},${Math.min(255,ulb+22)},0.30)`;
     ctx.beginPath(); ctx.ellipse(cx,topY+mh*0.22,mw*0.09,mh*0.045,0,0,Math.PI*2); ctx.fill();
-    // ⑤ Lower lip — fuller
     const llr=~~(r*0.74),llg=~~(g*0.60),llb=~~(b*0.58);
     const lcY=cy+gap*0.40, btmY=cy+mh*0.5+gap*0.74;
     ctx.fillStyle=`rgba(${llr},${llg},${llb},0.94)`;
@@ -178,10 +193,9 @@ export default function DashboardAI() {
     ctx.beginPath(); ctx.ellipse(cx,btmY-mh*0.22,mw*0.17,mh*0.065,0,0,Math.PI*2); ctx.fill();
   }, []);
 
-  // ── Lip-sync helpers — drive waveform bars from audio analyser ──────────────
+  // ── Lip-sync from TTS audio (photo fallback) ─────────────────────────────────
   const startLipSync = useCallback((audioEl: HTMLAudioElement) => {
     stopLipSync();
-    // Size the mouth canvas to its parent on first use
     const mc = mouthCanvasRef.current;
     if (mc && mc.width === 0) {
       const wrap = mc.parentElement;
@@ -190,23 +204,18 @@ export default function DashboardAI() {
     try {
       if (!lipCtxRef.current) lipCtxRef.current = new (window.AudioContext || (window as unknown as { webkitAudioContext: typeof AudioContext }).webkitAudioContext)();
       const analyser = lipCtxRef.current.createAnalyser();
-      analyser.fftSize = 256;
-      analyser.smoothingTimeConstant = 0.5;
+      analyser.fftSize = 256; analyser.smoothingTimeConstant = 0.5;
       const src = lipCtxRef.current.createMediaElementSource(audioEl);
-      src.connect(analyser);
-      analyser.connect(lipCtxRef.current.destination);
+      src.connect(analyser); analyser.connect(lipCtxRef.current.destination);
       lipSrcRef.current = src;
       const data = new Uint8Array(analyser.frequencyBinCount);
       const tick = () => {
         lipAnimRef.current = requestAnimationFrame(tick);
         analyser.getByteFrequencyData(data);
-        // Waveform bars
         waveBarRefs.current.forEach((bar, i) => {
           if (!bar) return;
-          const bin = Math.floor(2 + i * 4);
-          bar.style.height = Math.max(3, Math.round((data[bin] / 255) * 24)) + "px";
+          bar.style.height = Math.max(3, Math.round((data[Math.floor(2+i*4)] / 255) * 24)) + "px";
         });
-        // Mouth canvas — RMS of speech-freq range (bins 2–50)
         let sum = 0;
         for (let i = 2; i < 50; i++) sum += data[i] * data[i];
         const rms = Math.sqrt(sum / 48) / 255;
@@ -215,7 +224,7 @@ export default function DashboardAI() {
         drawMouth(Math.min(1, smoothAmpRef.current * 3.8));
       };
       tick();
-    } catch { /* AudioContext blocked — degrade gracefully */ }
+    } catch { /* AudioContext blocked */ }
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [drawMouth]);
 
@@ -228,7 +237,192 @@ export default function DashboardAI() {
     waveBarRefs.current.forEach(bar => { if (bar) bar.style.height = "3px"; });
   }
 
-  // ── TTS helpers ──────────────────────────────────────────────────────────────
+  // ── D-ID Streams — audio amplitude monitor ──────────────────────────────────
+  // Detect when D-ID video finishes speaking (audio goes silent).
+  function _startDIDAudioMonitor() {
+    const vid = didVideoRef.current;
+    if (!vid || !vid.srcObject) return;
+    try {
+      if (!didAudioCtxRef.current || didAudioCtxRef.current.state === "closed") {
+        didAudioCtxRef.current = new AudioContext();
+      }
+      const src = didAudioCtxRef.current.createMediaStreamSource(vid.srcObject as MediaStream);
+      const analyser = didAudioCtxRef.current.createAnalyser();
+      analyser.fftSize = 256;
+      src.connect(analyser);
+      didAnalyserRef.current = analyser;
+      const data = new Uint8Array(analyser.frequencyBinCount);
+      let silenceFrames = 0;
+
+      const tick = () => {
+        didAnimRef.current = requestAnimationFrame(tick);
+        analyser.getByteFrequencyData(data);
+        const avg = data.reduce((s, v) => s + v, 0) / data.length;
+
+        // Also drive waveform bars from D-ID audio
+        waveBarRefs.current.forEach((bar, i) => {
+          if (!bar) return;
+          bar.style.height = Math.max(3, Math.round((data[Math.floor(2+i*4)] / 255) * 24)) + "px";
+        });
+
+        if (avg > 6) {
+          silenceFrames = 0;
+          didSpeakStartedRef.current = true;
+        } else if (didSpeakStartedRef.current) {
+          silenceFrames++;
+          // ~30 frames at 60fps ≈ 500ms silence after audio started → done
+          if (silenceFrames > 35) {
+            src.disconnect();
+            if (didAnimRef.current) { cancelAnimationFrame(didAnimRef.current); didAnimRef.current = null; }
+            _onDIDSpeakDone();
+          }
+        }
+      };
+      tick();
+    } catch { /* ignore — timer fallback still active */ }
+  }
+
+  function _stopDIDAudioMonitor() {
+    if (didAnimRef.current) { cancelAnimationFrame(didAnimRef.current); didAnimRef.current = null; }
+    waveBarRefs.current.forEach(bar => { if (bar) bar.style.height = "3px"; });
+  }
+
+  function _onDIDSpeakDone() {
+    if (didSpeakTimerRef.current) { clearTimeout(didSpeakTimerRef.current); didSpeakTimerRef.current = null; }
+    setDidSpeaking(false);
+    setSpeaking(false);
+    setAvatarState(streamingRef.current ? "thinking" : "idle");
+    _stopDIDAudioMonitor();
+  }
+
+  // ── D-ID Streams — init WebRTC session ─────────────────────────────────────
+  const initDIDStream = useCallback(async () => {
+    if (!VIDEO_AVATAR || !DID_SOURCE_URL || !tokenRef.current || didReadyRef.current) return;
+    try {
+      const data = await api.post<{
+        id: string;
+        offer: RTCSessionDescriptionInit;
+        ice_servers: RTCIceServer[];
+        session_id: string;
+      }>("/avatar/stream/create", {
+        source_url: DID_SOURCE_URL,
+        driver_url: "bank://lively/driver",
+        config: { stitch: true },
+      }, tokenRef.current);
+
+      didStreamIdRef.current  = data.id;
+      didSessionIdRef.current = data.session_id;
+
+      const pc = new RTCPeerConnection({ iceServers: data.ice_servers });
+      peerRef.current = pc;
+
+      // Forward ICE candidates to D-ID via backend
+      pc.addEventListener("icecandidate", async ({ candidate }) => {
+        if (!candidate || !didStreamIdRef.current || !tokenRef.current) return;
+        try {
+          await api.post(`/avatar/stream/${didStreamIdRef.current}/ice`, {
+            candidate:     candidate.candidate,
+            sdpMid:        candidate.sdpMid,
+            sdpMLineIndex: candidate.sdpMLineIndex,
+            session_id:    didSessionIdRef.current,
+          }, tokenRef.current);
+        } catch { /* non-fatal */ }
+      });
+
+      // Receive D-ID video/audio track → attach to <video> element
+      pc.addEventListener("track", (event) => {
+        const vid = didVideoRef.current;
+        if (vid && event.streams?.[0]) {
+          vid.srcObject = event.streams[0];
+          didReadyRef.current = true;
+          // Start monitoring audio so we can detect end-of-speech
+          setTimeout(_startDIDAudioMonitor, 500);
+        }
+      });
+
+      await pc.setRemoteDescription(new RTCSessionDescription(data.offer));
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+
+      await api.post(`/avatar/stream/${didStreamIdRef.current}/sdp`, {
+        answer:     { sdp: answer.sdp, type: answer.type },
+        session_id: didSessionIdRef.current,
+      }, tokenRef.current);
+
+    } catch (e) {
+      console.warn("[DashboardAI] D-ID stream init failed:", e);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ── D-ID Streams — send text to speak ───────────────────────────────────────
+  const speakDID = useCallback(async (text: string) => {
+    if (!text.trim()) return;
+
+    // Fallback to Cartesia TTS if D-ID not ready
+    if (!didReadyRef.current || !didStreamIdRef.current || !tokenRef.current) {
+      enqueueTTS(text);
+      return;
+    }
+
+    ttsAbortRef.current = false;
+    setSpeaking(true);
+    setAvatarState("speaking");
+    setDidSpeaking(true);
+    didSpeakStartedRef.current = false;
+
+    // Extend the silence-timer to cover this sentence's duration
+    const durMs = Math.max(2500, (text.length / 11) * 1000 + 1200);
+    const newEnd = Math.max(didSpeakEndRef.current, Date.now()) + durMs;
+    didSpeakEndRef.current = newEnd;
+    if (didSpeakTimerRef.current) clearTimeout(didSpeakTimerRef.current);
+    didSpeakTimerRef.current = setTimeout(() => {
+      // Only reset to idle if the audio analyser hasn't already done so
+      if (Date.now() >= didSpeakEndRef.current - 200) {
+        _onDIDSpeakDone();
+      }
+    }, newEnd - Date.now() + 500);
+
+    try {
+      await api.post(`/avatar/stream/${didStreamIdRef.current}/speak`, {
+        script: {
+          type:     "text",
+          input:    text,
+          provider: { type: DID_VOICE_PROVIDER, voice_id: DID_VOICE_ID },
+        },
+        config:     { stitch: true },
+        session_id: didSessionIdRef.current,
+      }, tokenRef.current);
+    } catch (e) {
+      console.warn("[DashboardAI] D-ID speak failed, falling back to TTS:", e);
+      enqueueTTS(text);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  // ── Open/close: init D-ID on first open, tear down on close ─────────────────
+  useEffect(() => {
+    if (open && VIDEO_AVATAR && DID_SOURCE_URL && !didReadyRef.current) {
+      initDIDStream();
+    }
+    if (!open && didStreamIdRef.current && tokenRef.current) {
+      // Fire-and-forget cleanup
+      const sid = didStreamIdRef.current;
+      const tok = tokenRef.current;
+      api.delete(`/avatar/stream/${sid}`, tok).catch(() => {});
+      didStreamIdRef.current  = null;
+      didSessionIdRef.current = null;
+      didReadyRef.current     = false;
+      peerRef.current?.close();
+      peerRef.current = null;
+      if (didVideoRef.current) didVideoRef.current.srcObject = null;
+      _stopDIDAudioMonitor();
+      setDidSpeaking(false);
+    }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open]);
+
+  // ── TTS helpers (Cartesia — used when D-ID unavailable) ─────────────────────
   const fetchAudioUrl = useCallback(async (text: string): Promise<string | null> => {
     const tok = tokenRef.current;
     if (!text.trim() || !tok || ttsAbortRef.current) return null;
@@ -244,13 +438,18 @@ export default function DashboardAI() {
   }, []);
 
   const stopTTS = useCallback(() => {
-    ttsAbortRef.current = true;
-    ttsQRef.current     = [];
-    ttsRunRef.current   = false;
+    ttsAbortRef.current   = true;
+    ttsQRef.current       = [];
+    ttsRunRef.current     = false;
     ttsPendingRef.current = "";
     stopLipSync();
     if (audioRef.current)   { audioRef.current.pause(); audioRef.current = null; }
     if (audioUrlRef.current){ URL.revokeObjectURL(audioUrlRef.current); audioUrlRef.current = null; }
+    // Also stop D-ID speaking
+    if (didSpeakTimerRef.current) { clearTimeout(didSpeakTimerRef.current); didSpeakTimerRef.current = null; }
+    didSpeakEndRef.current = 0;
+    _stopDIDAudioMonitor();
+    setDidSpeaking(false);
     setSpeaking(false);
     setAvatarState(streamingRef.current ? "thinking" : "idle");
   // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -307,12 +506,12 @@ export default function DashboardAI() {
   const sendMessage = useCallback(async (text: string) => {
     if (!text.trim() || !token) return;
 
-    // ── Interrupt any in-progress response before starting a new one ─────────
     abortRef.current?.abort();
     abortRef.current = new AbortController();
     stopTTS();
-    ttsAbortRef.current = false;
+    ttsAbortRef.current   = false;
     ttsPendingRef.current = "";
+
     if (streamingRef.current) {
       setMessages(prev => {
         const next = [...prev];
@@ -325,7 +524,6 @@ export default function DashboardAI() {
       });
       setStreaming(false);
     }
-    // ─────────────────────────────────────────────────────────────────────────
 
     setMessages(prev => [
       ...prev,
@@ -338,6 +536,9 @@ export default function DashboardAI() {
 
     let fullAnswer = "";
     const history = messages.map(m => ({ role: m.role, content: m.content }));
+
+    // Decide the speak function: D-ID if available, Cartesia otherwise
+    const speakFn = (VIDEO_AVATAR && DID_SOURCE_URL) ? speakDID : enqueueTTS;
 
     try {
       const res = await fetch(`${API_URL}/api/v1/conversations/assistant/stream`, {
@@ -373,18 +574,14 @@ export default function DashboardAI() {
                 next[next.length - 1] = { role: "assistant", content: fullAnswer, streaming: true };
                 return next;
               });
-              // Lower thresholds → voice starts sooner, shorter chunks = faster Cartesia synthesis
               let m: RegExpMatchArray | null;
               while ((m = /^([\s\S]{6,}?[.!?])\s+/.exec(ttsPendingRef.current)) !== null) {
-                enqueueTTS(m[1]);
+                speakFn(m[1]);
                 ttsPendingRef.current = ttsPendingRef.current.slice(m[0].length);
               }
               if (ttsPendingRef.current.length > 50) {
                 const cut = ttsPendingRef.current.lastIndexOf(" ", 42);
-                if (cut > 10) {
-                  enqueueTTS(ttsPendingRef.current.slice(0, cut));
-                  ttsPendingRef.current = ttsPendingRef.current.slice(cut + 1);
-                }
+                if (cut > 10) { speakFn(ttsPendingRef.current.slice(0, cut)); ttsPendingRef.current = ttsPendingRef.current.slice(cut + 1); }
               }
             } else if (evt.type === "done") {
               fullAnswer = evt.answer || fullAnswer;
@@ -404,15 +601,14 @@ export default function DashboardAI() {
       });
       setStreaming(false);
       if (ttsPendingRef.current.trim()) {
-        enqueueTTS(ttsPendingRef.current.trim());
+        speakFn(ttsPendingRef.current.trim());
         ttsPendingRef.current = "";
       }
-      // If TTS queue is empty (voice off), return to idle
-      if (ttsQRef.current.length === 0 && !ttsRunRef.current) {
+      if (ttsQRef.current.length === 0 && !ttsRunRef.current && !didSpeakEndRef.current) {
         setAvatarState("idle");
       }
     }
-  }, [token, messages, stopTTS, enqueueTTS]);
+  }, [token, messages, stopTTS, enqueueTTS, speakDID]);
 
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
@@ -426,9 +622,7 @@ export default function DashboardAI() {
     const SR = w.SpeechRecognition ?? w.webkitSpeechRecognition;
     if (!SR) { alert("Speech recognition requires Chrome or Edge."); return; }
     const recognition = new SR();
-    recognition.continuous     = false;
-    recognition.interimResults = false;
-    recognition.lang           = "en-US";
+    recognition.continuous = false; recognition.interimResults = false; recognition.lang = "en-US";
     recognition.onstart  = () => { setListening(true);  setAvatarState("listening"); };
     recognition.onend    = () => { setListening(false); setAvatarState(streamingRef.current ? "thinking" : "idle"); };
     recognition.onerror  = () => { setListening(false); setAvatarState("idle"); };
@@ -454,63 +648,61 @@ export default function DashboardAI() {
   return (
     <div className="fixed bottom-6 right-6 z-50 flex flex-col items-end gap-3 pointer-events-none">
 
-      {/* ── Chat panel ── */}
       {open && (
         <div
           className="pointer-events-auto w-[380px] rounded-3xl shadow-2xl border border-white/60 flex flex-col overflow-hidden"
           style={{ height: 600, background: "rgba(255,255,255,0.97)", backdropFilter: "blur(24px)", WebkitBackdropFilter: "blur(24px)" }}
         >
-          {/* ── Grace-style avatar header ── */}
+          {/* ── Avatar header ── */}
           <div className="relative flex-shrink-0 overflow-hidden" style={{ height: 230, background: "#111827" }}>
 
             {VIDEO_AVATAR ? (
-              /* ── VIDEO MODE: idle loop + canvas lip-sync overlay ── */
+              /* ── D-ID Streams mode ── */
               <>
-                {/* Idle video — always playing, provides natural head motion & blinks */}
+                {/* Idle video loop — visible when not speaking */}
                 <video
                   ref={idleVideoRef} autoPlay loop muted playsInline
-                  crossOrigin="anonymous"
                   className="absolute inset-0 w-full h-full object-cover pointer-events-none"
                   style={{
                     objectPosition: "center 8%",
                     zIndex: 1,
-                    animation: avatarState === "speaking"
-                      ? "dash-speak-bob 0.42s ease-in-out infinite alternate"
-                      : avatarState === "listening"
-                        ? "dash-listen-pulse 1.2s ease-in-out infinite"
-                        : "dash-breathe 5s ease-in-out infinite",
+                    opacity: didSpeaking ? 0 : 1,
+                    transition: "opacity .35s cubic-bezier(.4,0,.2,1)",
+                    animation: avatarState === "listening"
+                      ? "dash-listen-pulse 1.2s ease-in-out infinite"
+                      : "dash-breathe 5s ease-in-out infinite",
                   }}
                 >
                   <source src={AVATAR_IDLE_VID} type="video/mp4" />
                 </video>
-                {/* Canvas lip-sync overlay — driven by TTS audio amplitude in real time */}
-                <canvas
-                  ref={mouthCanvasRef}
-                  width={0} height={0}
-                  className="absolute inset-0 pointer-events-none"
-                  style={{ width: "100%", height: "100%", zIndex: 3 }}
+
+                {/* D-ID speaking video — WebRTC stream, visible when speaking */}
+                {/* No <source> children — srcObject set programmatically from WebRTC ontrack */}
+                <video
+                  ref={didVideoRef} autoPlay playsInline
+                  className="absolute inset-0 w-full h-full object-cover pointer-events-none"
+                  style={{
+                    objectPosition: "center 8%",
+                    zIndex: 2,
+                    opacity: didSpeaking ? 1 : 0,
+                    transition: "opacity .3s cubic-bezier(.4,0,.2,1)",
+                  }}
                 />
-                {/* Eye blink overlays */}
-                <div className="absolute pointer-events-none" style={{
-                  width:"22%", height:"11%", left:"24%", top:"28%",
-                  borderRadius:"0 0 55% 55%/0 0 80% 80%",
-                  background:"linear-gradient(to bottom,rgba(18,12,8,0.02) 0%,rgba(18,12,8,0.9) 55%,rgba(18,12,8,0.88) 100%)",
-                  transform:"scaleY(0)", transformOrigin:"top center", zIndex:5,
-                  animation:"dash-blink 4.5s ease-in-out infinite",
-                }} />
-                <div className="absolute pointer-events-none" style={{
-                  width:"22%", height:"11%", left:"54%", top:"28%",
-                  borderRadius:"0 0 55% 55%/0 0 80% 80%",
-                  background:"linear-gradient(to bottom,rgba(18,12,8,0.02) 0%,rgba(18,12,8,0.9) 55%,rgba(18,12,8,0.88) 100%)",
-                  transform:"scaleY(0)", transformOrigin:"top center", zIndex:5,
-                  animation:"dash-blink 5.4s ease-in-out infinite",
-                }} />
+
+                {/* Blink overlays — only over idle video */}
+                {!didSpeaking && (
+                  <>
+                    <div className="absolute pointer-events-none" style={{ width:"22%",height:"11%",left:"24%",top:"28%",borderRadius:"0 0 55% 55%/0 0 80% 80%",background:"linear-gradient(to bottom,rgba(18,12,8,0.02) 0%,rgba(18,12,8,0.9) 55%,rgba(18,12,8,0.88) 100%)",transform:"scaleY(0)",transformOrigin:"top center",zIndex:5,animation:"dash-blink 4.5s ease-in-out infinite" }} />
+                    <div className="absolute pointer-events-none" style={{ width:"22%",height:"11%",left:"54%",top:"28%",borderRadius:"0 0 55% 55%/0 0 80% 80%",background:"linear-gradient(to bottom,rgba(18,12,8,0.02) 0%,rgba(18,12,8,0.9) 55%,rgba(18,12,8,0.88) 100%)",transform:"scaleY(0)",transformOrigin:"top center",zIndex:5,animation:"dash-blink 5.4s ease-in-out infinite" }} />
+                  </>
+                )}
               </>
             ) : (
-              /* ── PHOTO MODE: static image + canvas lip-sync overlay ── */
+              /* ── Photo + canvas lip-sync fallback ── */
               <>
                 {/* eslint-disable-next-line @next/next/no-img-element */}
                 <img
+                  id="dash-avatar-img"
                   src={AVATAR_URL} alt="AI Assistant" draggable={false}
                   crossOrigin="anonymous"
                   onLoad={e => sampleSkinColor(e.currentTarget)}
@@ -525,96 +717,81 @@ export default function DashboardAI() {
                     zIndex: 1,
                   }}
                 />
-                {/* Canvas mouth lip-sync overlay */}
-                <canvas
-                  ref={mouthCanvasRef}
-                  width={0} height={0}
+                <canvas ref={mouthCanvasRef} width={0} height={0}
                   className="absolute inset-0 pointer-events-none"
-                  style={{ width: "100%", height: "100%", zIndex: 3 }}
-                />
-                {/* Eye blink overlays */}
-                <div className="absolute pointer-events-none" style={{
-                  width:"22%", height:"11%", left:"24%", top:"28%",
-                  borderRadius:"0 0 55% 55%/0 0 80% 80%",
-                  background:"linear-gradient(to bottom,rgba(18,12,8,0.02) 0%,rgba(18,12,8,0.9) 55%,rgba(18,12,8,0.88) 100%)",
-                  transform:"scaleY(0)", transformOrigin:"top center", zIndex:5,
-                  animation:"dash-blink 4.5s ease-in-out infinite",
-                }} />
-                <div className="absolute pointer-events-none" style={{
-                  width:"22%", height:"11%", left:"54%", top:"28%",
-                  borderRadius:"0 0 55% 55%/0 0 80% 80%",
-                  background:"linear-gradient(to bottom,rgba(18,12,8,0.02) 0%,rgba(18,12,8,0.9) 55%,rgba(18,12,8,0.88) 100%)",
-                  transform:"scaleY(0)", transformOrigin:"top center", zIndex:5,
-                  animation:"dash-blink 5.4s ease-in-out infinite",
-                }} />
+                  style={{ width:"100%",height:"100%",zIndex:3 }} />
+                <div className="absolute pointer-events-none" style={{ width:"22%",height:"11%",left:"24%",top:"28%",borderRadius:"0 0 55% 55%/0 0 80% 80%",background:"linear-gradient(to bottom,rgba(18,12,8,0.02) 0%,rgba(18,12,8,0.9) 55%,rgba(18,12,8,0.88) 100%)",transform:"scaleY(0)",transformOrigin:"top center",zIndex:5,animation:"dash-blink 4.5s ease-in-out infinite" }} />
+                <div className="absolute pointer-events-none" style={{ width:"22%",height:"11%",left:"54%",top:"28%",borderRadius:"0 0 55% 55%/0 0 80% 80%",background:"linear-gradient(to bottom,rgba(18,12,8,0.02) 0%,rgba(18,12,8,0.9) 55%,rgba(18,12,8,0.88) 100%)",transform:"scaleY(0)",transformOrigin:"top center",zIndex:5,animation:"dash-blink 5.4s ease-in-out infinite" }} />
               </>
             )}
+
             {/* State glow border */}
             <div className="absolute inset-0 pointer-events-none transition-all duration-300" style={{
               border: "3px solid transparent",
-              ...(avatarState === "thinking"  ? { borderColor: "rgba(59,130,246,.55)",  boxShadow: "inset 0 0 30px rgba(59,130,246,.25)" } : {}),
-              ...(avatarState === "listening" ? { borderColor: "rgba(16,185,129,.6)",   boxShadow: "inset 0 0 30px rgba(16,185,129,.25)" } : {}),
-              ...(avatarState === "speaking"  ? { borderColor: "rgba(124,58,237,.75)",  boxShadow: "inset 0 0 30px rgba(124,58,237,.3), 0 0 0 2px rgba(124,58,237,.4)" } : {}),
+              ...(avatarState === "thinking"  ? { borderColor:"rgba(59,130,246,.55)",  boxShadow:"inset 0 0 30px rgba(59,130,246,.25)" } : {}),
+              ...(avatarState === "listening" ? { borderColor:"rgba(16,185,129,.6)",   boxShadow:"inset 0 0 30px rgba(16,185,129,.25)" } : {}),
+              ...(avatarState === "speaking"  ? { borderColor:"rgba(124,58,237,.75)",  boxShadow:"inset 0 0 30px rgba(124,58,237,.3), 0 0 0 2px rgba(124,58,237,.4)" } : {}),
             }} />
-            {/* Top gradient bar — name + controls */}
+
+            {/* Top bar */}
             <div className="absolute top-0 left-0 right-0 flex items-start justify-between px-3 pt-2.5 pb-8"
-              style={{ background: "linear-gradient(to bottom,rgba(0,0,0,.65),transparent)" }}>
+              style={{ background:"linear-gradient(to bottom,rgba(0,0,0,.65),transparent)" }}>
               <div>
-                <p className="text-sm font-bold text-white leading-tight" style={{ textShadow: "0 1px 4px rgba(0,0,0,.5)" }}>Dashboard Assistant</p>
+                <p className="text-sm font-bold text-white leading-tight" style={{ textShadow:"0 1px 4px rgba(0,0,0,.5)" }}>Dashboard Assistant</p>
                 <p className="text-[10.5px] text-white/75">AI Assistant</p>
               </div>
               <div className="flex items-center gap-1">
                 {speaking && (
                   <button onClick={stopTTS} title="Stop speaking"
                     className="w-7 h-7 rounded-lg flex items-center justify-center text-white/85 hover:bg-black/40 transition"
-                    style={{ background: "rgba(0,0,0,.3)", backdropFilter: "blur(4px)" }}>
+                    style={{ background:"rgba(0,0,0,.3)",backdropFilter:"blur(4px)" }}>
                     <VolumeX size={13} />
                   </button>
                 )}
                 <button onClick={() => { setTtsEnabled(v => !v); if (speaking) stopTTS(); }} title={ttsEnabled ? "Mute" : "Unmute"}
                   className="w-7 h-7 rounded-lg flex items-center justify-center text-white/85 hover:bg-black/40 transition"
-                  style={{ background: "rgba(0,0,0,.3)", backdropFilter: "blur(4px)" }}>
+                  style={{ background:"rgba(0,0,0,.3)",backdropFilter:"blur(4px)" }}>
                   {ttsEnabled ? <Volume2 size={13} /> : <VolumeX size={13} />}
                 </button>
                 {messages.length > 0 && (
                   <button onClick={clearChat} title="Clear"
                     className="w-7 h-7 rounded-lg flex items-center justify-center text-white/85 hover:bg-black/40 transition"
-                    style={{ background: "rgba(0,0,0,.3)", backdropFilter: "blur(4px)" }}>
+                    style={{ background:"rgba(0,0,0,.3)",backdropFilter:"blur(4px)" }}>
                     <RotateCcw size={12} />
                   </button>
                 )}
                 <button onClick={() => setOpen(false)}
                   className="w-7 h-7 rounded-lg flex items-center justify-center text-white/85 hover:bg-black/40 transition"
-                  style={{ background: "rgba(0,0,0,.3)", backdropFilter: "blur(4px)" }}>
+                  style={{ background:"rgba(0,0,0,.3)",backdropFilter:"blur(4px)" }}>
                   <X size={13} />
                 </button>
               </div>
             </div>
-            {/* Bottom bar — status pill + waveform + mic */}
+
+            {/* Bottom bar — status + waveform + mic */}
             <div className="absolute bottom-0 left-0 right-0 flex items-end gap-2 px-3 pb-2.5 pt-8"
-              style={{ background: "linear-gradient(to top,rgba(0,0,0,.65),transparent)" }}>
+              style={{ background:"linear-gradient(to top,rgba(0,0,0,.65),transparent)" }}>
               <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full flex-shrink-0"
-                style={{ background: "rgba(0,0,0,.4)", backdropFilter: "blur(4px)" }}>
+                style={{ background:"rgba(0,0,0,.4)",backdropFilter:"blur(4px)" }}>
                 <span className="w-2 h-2 rounded-full flex-shrink-0 transition-all duration-300" style={{
-                  background: avatarState === "thinking" ? "#60a5fa" : avatarState === "listening" ? "#34d399" : avatarState === "speaking" ? "#e879f9" : "#64748b",
+                  background: avatarState==="thinking" ? "#60a5fa" : avatarState==="listening" ? "#34d399" : avatarState==="speaking" ? "#e879f9" : "#64748b",
                   animation: avatarState !== "idle" ? "dash-dot-pulse 0.7s ease-in-out infinite" : "none",
                 }} />
                 <span className="text-[10.5px] font-semibold text-white/90 whitespace-nowrap">{statusLabel}</span>
               </div>
-              {/* Waveform bars */}
               <div className="flex items-end gap-[2.5px] h-6 flex-1 transition-opacity duration-300"
-                style={{ opacity: avatarState === "speaking" || avatarState === "listening" ? 1 : 0 }}>
+                style={{ opacity: avatarState==="speaking" || avatarState==="listening" ? 1 : 0 }}>
                 {Array.from({ length: NUM_WAVE_BARS }, (_, i) => (
                   <span key={i} ref={el => { waveBarRefs.current[i] = el; }}
                     className="flex-shrink-0 rounded-sm"
-                    style={{ width: 3, height: 3, background: "rgba(255,255,255,.85)", transition: "height 0.04s linear" }} />
+                    style={{ width:3,height:3,background:"rgba(255,255,255,.85)",transition:"height 0.04s linear" }} />
                 ))}
               </div>
               <button onClick={startVoice} title={listening ? "Stop" : "Voice input"}
                 className="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 text-white transition"
                 style={{
                   background: listening ? "rgba(239,68,68,.5)" : "rgba(255,255,255,.15)",
-                  backdropFilter: "blur(4px)",
+                  backdropFilter:"blur(4px)",
                   animation: listening ? "dash-dot-pulse 1.2s ease-in-out infinite" : "none",
                 }}>
                 {listening ? <MicOff size={14} /> : <Mic size={14} />}
@@ -630,7 +807,7 @@ export default function DashboardAI() {
                   <p className="text-sm font-semibold text-slate-700 mb-1">Your AI Agent Assistant</p>
                   <p className="text-xs text-slate-400 leading-relaxed mb-4">Ask about training status, conversation quality, API setup, or how to improve your agent.</p>
                   <div className="flex flex-col gap-2">
-                    {["How do I train my AI on a new site?", "Why isn't my widget responding?", "How do I embed the widget?"].map(q => (
+                    {["How do I train my AI on a new site?","Why isn't my widget responding?","How do I embed the widget?"].map(q => (
                       <button key={q} onClick={() => sendMessage(q)}
                         className="text-xs text-left px-3 py-2 rounded-xl bg-slate-50 hover:bg-violet-50 hover:text-violet-700 text-slate-500 border border-slate-100 hover:border-violet-200 transition">{q}
                       </button>
@@ -640,14 +817,14 @@ export default function DashboardAI() {
               </div>
             )}
             {messages.map((m, i) => (
-              <div key={i} className={`flex ${m.role === "user" ? "justify-end" : "justify-start"}`}>
+              <div key={i} className={`flex ${m.role==="user" ? "justify-end" : "justify-start"}`}>
                 <div
-                  className={`max-w-[86%] px-3.5 py-2.5 rounded-2xl text-sm leading-relaxed ${m.role === "user" ? "text-white rounded-br-sm" : "bg-slate-100 text-slate-700 rounded-bl-sm"}`}
-                  style={m.role === "user" ? { background: "linear-gradient(135deg,#7c3aed,#a855f7)" } : {}}
+                  className={`max-w-[86%] px-3.5 py-2.5 rounded-2xl text-sm leading-relaxed ${m.role==="user" ? "text-white rounded-br-sm" : "bg-slate-100 text-slate-700 rounded-bl-sm"}`}
+                  style={m.role==="user" ? { background:"linear-gradient(135deg,#7c3aed,#a855f7)" } : {}}
                 >
                   {m.content || (m.streaming && (
                     <span className="flex gap-1 items-center h-4 py-0.5">
-                      {[0, 150, 300].map(d => <span key={d} className="w-1.5 h-1.5 rounded-full bg-slate-400 animate-bounce" style={{ animationDelay: `${d}ms` }} />)}
+                      {[0,150,300].map(d => <span key={d} className="w-1.5 h-1.5 rounded-full bg-slate-400 animate-bounce" style={{ animationDelay:`${d}ms` }} />)}
                     </span>
                   ))}
                   {m.streaming && m.content && <span className="inline-block w-0.5 h-3.5 bg-slate-400 ml-0.5 animate-pulse align-middle" />}
@@ -661,14 +838,11 @@ export default function DashboardAI() {
           <div className="p-3 border-t border-slate-100 flex-shrink-0">
             <form onSubmit={handleSubmit} className="flex items-center gap-2 bg-slate-50 rounded-2xl px-3 py-1.5 border border-slate-200 focus-within:border-violet-300 focus-within:ring-2 focus-within:ring-violet-100 transition">
               <input
-                ref={inputRef}
-                type="text"
-                value={input}
+                ref={inputRef} type="text" value={input}
                 onChange={e => setInput(e.target.value)}
                 placeholder={listening ? "Listening…" : streaming && !input ? "Responding… (type to interrupt)" : "Type or speak…"}
                 className="flex-1 bg-transparent text-sm text-slate-700 placeholder:text-slate-400 focus:outline-none py-1 min-w-0"
               />
-              {/* During streaming with no text: red stop button. Otherwise: send button */}
               {streaming && !input.trim() ? (
                 <button type="button" onClick={() => {
                   abortRef.current?.abort();
@@ -677,49 +851,47 @@ export default function DashboardAI() {
                     const next = [...prev];
                     const last = next[next.length - 1];
                     if (last?.streaming) {
-                      if (last.content.trim()) return [...next.slice(0, -1), { ...last, streaming: false }];
-                      return next.slice(0, -1);
+                      if (last.content.trim()) return [...next.slice(0,-1),{...last,streaming:false}];
+                      return next.slice(0,-1);
                     }
                     return next;
                   });
-                  setStreaming(false);
-                  setAvatarState("idle");
+                  setStreaming(false); setAvatarState("idle");
                 }}
                   className="p-1.5 rounded-xl flex-shrink-0 text-white hover:opacity-90 transition shadow-sm"
-                  style={{ background: "linear-gradient(135deg,#ef4444,#dc2626)" }}
-                  title="Stop response">
+                  style={{ background:"linear-gradient(135deg,#ef4444,#dc2626)" }} title="Stop response">
                   <X size={15} />
                 </button>
               ) : (
                 <button type="submit" disabled={!input.trim()}
                   className="p-1.5 rounded-xl flex-shrink-0 text-white disabled:opacity-40 hover:opacity-90 transition shadow-sm"
-                  style={{ background: streaming ? "linear-gradient(135deg,#ef4444,#dc2626)" : "linear-gradient(135deg,#7c3aed,#a855f7)" }}
+                  style={{ background:streaming ? "linear-gradient(135deg,#ef4444,#dc2626)" : "linear-gradient(135deg,#7c3aed,#a855f7)" }}
                   title={streaming ? "Interrupt & send" : "Send"}>
-                  {streaming ? <Send size={15} /> : <Send size={15} />}
+                  <Send size={15} />
                 </button>
               )}
             </form>
             <p className="text-[10px] text-slate-400 text-center mt-1.5">
-              Powered by WebTalk AI{messages.length > 0 && ` · ${Math.ceil(messages.length / 2)} turn${messages.length > 2 ? "s" : ""}`}
+              Powered by WebTalk AI{messages.length > 0 && ` · ${Math.ceil(messages.length/2)} turn${messages.length>2?"s":""}`}
             </p>
           </div>
         </div>
       )}
 
-      {/* ── Launch button ── */}
+      {/* Launch button */}
       <button
         onClick={() => setOpen(v => !v)}
         className="pointer-events-auto w-14 h-14 rounded-2xl shadow-xl flex items-center justify-center transition-all duration-200 hover:scale-105 active:scale-95"
         style={{
           background: open ? "#334155" : "linear-gradient(135deg,#7c3aed,#a855f7)",
-          boxShadow: open ? "0 10px 25px rgba(0,0,0,.2)" : "0 10px 30px rgba(124,58,237,.4)",
+          boxShadow:  open ? "0 10px 25px rgba(0,0,0,.2)" : "0 10px 30px rgba(124,58,237,.4)",
         }}
         title="Dashboard AI Assistant"
       >
         {open ? <X size={20} className="text-white" /> : (
           <div className="relative">
             <MessageSquare size={20} className="text-white" />
-            {(speaking || listening || streaming) && (
+            {(speaking||listening||streaming) && (
               <span className="absolute -top-1.5 -right-1.5 w-3 h-3 rounded-full bg-emerald-400 border-2 border-white" />
             )}
           </div>
