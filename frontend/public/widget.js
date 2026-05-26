@@ -320,7 +320,7 @@
     ctx.clearRect(0,0,W,H);
     if (openAmt < 0.02) return;
 
-    const cx=W*0.50, cy=H*0.72, mw=W*0.26, mh=H*0.068;
+    const cx=W*0.50, cy=H*0.80, mw=W*0.26, mh=H*0.068;
     const {r,g,b} = _skinColor;
     const gap = openAmt * mh * 4;   // max opening ≈ 4 × resting lip height
 
@@ -448,7 +448,7 @@
         headers: { "Content-Type": "application/json", "X-API-Key": cfg.apiKey },
         body: JSON.stringify({
           source_url: cfg.didSourceUrl,
-          driver_url: "bank://lively",
+          driver_url: "bank://lively/driver",
           output_resolution: 512,
           stream_warmup: true,
           config: { stitch: true, fluent: true, pad_audio: 0.0 },

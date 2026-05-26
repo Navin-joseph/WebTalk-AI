@@ -2,10 +2,37 @@
 import { useEffect, useState } from "react";
 import { createClient } from "@/lib/supabase";
 import { api } from "@/lib/api";
-import { Copy, Trash2, Plus, Key, Code2, CheckCircle2 } from "lucide-react";
+import { Copy, Trash2, Plus, Key, Code2, CheckCircle2, Sparkles } from "lucide-react";
 import ConfirmModal from "@/components/ConfirmModal";
 
 interface ApiKey { id: string; name: string; key_prefix: string; created_at: string; last_used_at?: string; }
+
+/** Build the ready-to-paste embed snippet for a given API key. */
+function buildSnippet(apiKey: string) {
+  return `<!-- WebTalk AI Widget — paste before </body> -->
+<script defer src="https://web-talk-ai.vercel.app/widget.js"></script>
+<script>
+  document.addEventListener("DOMContentLoaded", function () {
+    WebTalkAI.init({
+      apiKey:   "${apiKey}",
+
+      // ── Appearance ────────────────────────────────────────────────────
+      theme:    "purple",          // "purple" | "blue" | "green" | "dark"
+      position: "bottom-right",   // "bottom-right" | "bottom-left"
+
+      // ── Neural lip-sync avatar (D-ID Streams) ─────────────────────────
+      // Requires DID_API_KEY set in your backend environment variables.
+      // Change didSourceUrl to the public URL of your own avatar photo.
+      didEnabled:   true,
+      didSourceUrl: "https://web-talk-ai.vercel.app/avatar.jpg",
+
+      // ── Voice ─────────────────────────────────────────────────────────
+      voiceEnabled: true,          // show mic button for voice input
+      ttsAutoPlay:  true,          // auto-speak AI replies
+    });
+  });
+</script>`;
+}
 
 export default function ApiKeysPage() {
   const [keys, setKeys] = useState<ApiKey[]>([]);
@@ -58,48 +85,41 @@ export default function ApiKeysPage() {
     }
   }
 
-  const snippet = `<!-- WebTalk AI Widget — paste before </body> -->
-<script defer src="https://web-talk-ai.vercel.app/widget.js"></script>
-<script>
-  document.addEventListener("DOMContentLoaded", function () {
-    WebTalkAI.init({
-      apiKey: "YOUR_API_KEY",    // replace with your key below
-      position: "bottom-right",  // "bottom-right" | "bottom-left"
-      theme: "purple",           // "purple" | "blue" | "green" | "dark"
-      voiceEnabled: true,        // mic button for voice chat
-      ttsAutoPlay: true          // auto-speak AI replies
-    });
-  });
-</script>`;
+  // Snippet shown in the embed section — uses real key when freshly created
+  const snippet = buildSnippet(createdKey ?? "YOUR_API_KEY");
 
   return (
     <div className="space-y-8">
       <div>
         <h1 className="text-3xl font-bold text-slate-900 tracking-tight">Install & API Keys</h1>
-        <p className="text-slate-500 mt-1">Embed the AI on any website you own — voice + text out of the box</p>
+        <p className="text-slate-500 mt-1">Embed the AI widget on any website — neural lip-sync, voice & text out of the box</p>
       </div>
 
+      {/* ── Newly-created key banner ───────────────────────────────────────────── */}
       {createdKey && (
         <div className="bg-gradient-to-r from-emerald-50 to-teal-50 border border-emerald-200 rounded-2xl p-5 shadow-soft fade-in">
           <div className="flex items-center gap-2 mb-3">
             <CheckCircle2 size={18} className="text-emerald-600" />
-            <p className="font-semibold text-emerald-900">New API key created</p>
+            <p className="font-semibold text-emerald-900">New API key created — embed code below is ready to paste!</p>
           </div>
-          <p className="text-sm text-emerald-800 mb-3">Copy this key now — for security, it won&apos;t be shown again.</p>
+          <p className="text-sm text-emerald-800 mb-3">
+            Copy this key now — for security, it won&apos;t be shown again.
+            The embed snippet below has already been updated with your key.
+          </p>
           <div className="flex items-center gap-2 font-mono text-sm bg-white border border-emerald-200 rounded-xl px-4 py-3">
             <span className="flex-1 break-all text-slate-700">{createdKey}</span>
             <button
               onClick={() => { navigator.clipboard.writeText(createdKey); setCopied(true); setTimeout(() => setCopied(false), 2000); }}
               className="flex items-center gap-1.5 text-emerald-700 hover:text-emerald-900 font-medium text-xs bg-emerald-100 hover:bg-emerald-200 transition px-2.5 py-1.5 rounded-lg"
             >
-              {copied ? <><CheckCircle2 size={13} /> Copied</> : <><Copy size={13} /> Copy</>}
+              {copied ? <><CheckCircle2 size={13} /> Copied</> : <><Copy size={13} /> Copy key</>}
             </button>
           </div>
           <button onClick={() => setCreatedKey(null)} className="mt-3 text-xs text-emerald-600 hover:underline font-medium">Dismiss</button>
         </div>
       )}
 
-      {/* Create new key */}
+      {/* ── Create new key ─────────────────────────────────────────────────────── */}
       <div className="bg-white rounded-2xl border border-slate-200/70 p-6 shadow-soft">
         <div className="flex items-center gap-3 mb-5">
           <div className="w-10 h-10 rounded-xl bg-gradient-brand flex items-center justify-center">
@@ -125,7 +145,7 @@ export default function ApiKeysPage() {
         </form>
       </div>
 
-      {/* Keys list */}
+      {/* ── Keys list ─────────────────────────────────────────────────────────── */}
       <div className="bg-white rounded-2xl border border-slate-200/70 overflow-hidden shadow-soft">
         <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
           <h2 className="font-semibold text-slate-900">Active keys</h2>
@@ -172,19 +192,33 @@ export default function ApiKeysPage() {
         </table>
       </div>
 
-      {/* Embed snippet */}
+      {/* ── Embed snippet ─────────────────────────────────────────────────────── */}
       <div className="bg-white rounded-2xl border border-slate-200/70 p-6 shadow-soft">
-        <div className="flex items-center gap-3 mb-5">
+        <div className="flex items-center gap-3 mb-2">
           <div className="w-10 h-10 rounded-xl bg-slate-900 flex items-center justify-center">
             <Code2 size={18} className="text-white" />
           </div>
           <div>
             <h2 className="font-semibold text-slate-900">Embed the widget</h2>
-            <p className="text-xs text-slate-500">Paste this just before <code className="bg-slate-100 px-1 rounded">&lt;/body&gt;</code> on your site</p>
+            <p className="text-xs text-slate-500">
+              Paste this just before <code className="bg-slate-100 px-1 rounded">&lt;/body&gt;</code> on your site
+              {!createdKey && <span className="text-violet-600 font-medium"> — replace YOUR_API_KEY with a key from the table above</span>}
+            </p>
           </div>
         </div>
+
+        {/* D-ID notice */}
+        <div className="flex items-start gap-2.5 bg-violet-50 border border-violet-100 rounded-xl p-3.5 mb-4 mt-3">
+          <Sparkles size={15} className="text-violet-500 mt-0.5 flex-shrink-0" />
+          <p className="text-xs text-violet-700 leading-relaxed">
+            <strong>Neural lip-sync is enabled</strong> — the avatar&apos;s lips will move in sync with every AI reply using D-ID Streams.
+            Make sure <code className="bg-violet-100 px-1 rounded">DID_API_KEY</code> is set in your Render backend environment variables.
+            Change <code className="bg-violet-100 px-1 rounded">didSourceUrl</code> to any publicly accessible photo URL to use a custom avatar face.
+          </p>
+        </div>
+
         <div className="relative">
-          <pre className="bg-slate-900 text-slate-100 rounded-xl p-4 text-xs font-mono overflow-x-auto leading-relaxed">{snippet}</pre>
+          <pre className="bg-slate-900 text-slate-100 rounded-xl p-4 text-xs font-mono overflow-x-auto leading-relaxed whitespace-pre">{snippet}</pre>
           <button
             onClick={() => { navigator.clipboard.writeText(snippet); setSnippetCopied(true); setTimeout(() => setSnippetCopied(false), 2000); }}
             className="absolute top-3 right-3 bg-white/10 hover:bg-white/20 text-white text-xs font-medium px-2.5 py-1.5 rounded-lg flex items-center gap-1.5 backdrop-blur transition"
@@ -194,7 +228,7 @@ export default function ApiKeysPage() {
         </div>
       </div>
 
-      {/* Delete confirmation modal */}
+      {/* ── Delete confirmation modal ──────────────────────────────────────────── */}
       <ConfirmModal
         open={!!deleteTarget}
         title="Revoke API key?"
