@@ -60,35 +60,28 @@ export default function DashboardAI() {
   const lipCtxRef       = useRef<AudioContext | null>(null);
   const lipAnimRef      = useRef<number | null>(null);
   const lipSrcRef       = useRef<MediaElementAudioSourceNode | null>(null);
-  // Canvas mouth animation (photo fallback only)
+  // Canvas mouth animation
   const mouthCanvasRef  = useRef<HTMLCanvasElement>(null);
   const smoothAmpRef    = useRef(0);
   const skinColorRef    = useRef({ r: 188, g: 150, b: 128 });
-  // Video avatar refs
+  // Video avatar ref (idle loop)
   const idleVideoRef    = useRef<HTMLVideoElement>(null);
-  const talkVideoRef    = useRef<HTMLVideoElement>(null);
 
   useEffect(() => { tokenRef.current = token; }, [token]);
   useEffect(() => { ttsEnabledRef.current = ttsEnabled; }, [ttsEnabled]);
   useEffect(() => { streamingRef.current = streaming; }, [streaming]);
 
-  // ── Video crossfade: swap idle ↔ talk video when avatarState changes ────────
+  // ── Sample skin colour from video once it has a first frame ────────────────
   useEffect(() => {
     if (!VIDEO_AVATAR) return;
-    const idle = idleVideoRef.current;
-    const talk = talkVideoRef.current;
-    if (!idle || !talk) return;
-    if (avatarState === "speaking") {
-      idle.style.opacity = "0";
-      talk.style.opacity = "1";
-    } else if (avatarState === "listening") {
-      idle.style.opacity = "0.65";
-      talk.style.opacity = "0";
-    } else {
-      idle.style.opacity = "1";
-      talk.style.opacity = "0";
-    }
-  }, [avatarState]);
+    const vid = idleVideoRef.current;
+    if (!vid) return;
+    const onReady = () => sampleSkinColor(vid);
+    vid.addEventListener("loadeddata", onReady);
+    // If already loaded (e.g. cached) fire immediately
+    if (vid.readyState >= 2) onReady();
+    return () => vid.removeEventListener("loadeddata", onReady);
+  }, [sampleSkinColor]);
 
   useEffect(() => {
     const supabase = createClient();
@@ -108,10 +101,11 @@ export default function DashboardAI() {
     }
   }, [open, messages]);
 
-  // ── Skin colour sampling (runs once on avatar image load) ───────────────────
-  const sampleSkinColor = useCallback((imgEl: HTMLImageElement) => {
+  // ── Skin colour sampling (runs once on avatar image/video load) ─────────────
+  const sampleSkinColor = useCallback((imgEl: HTMLImageElement | HTMLVideoElement) => {
     try {
-      const W = imgEl.offsetWidth || 380, H = imgEl.offsetHeight || 230;
+      const W = (imgEl as HTMLImageElement).offsetWidth  || (imgEl as HTMLVideoElement).videoWidth  || 380;
+      const H = (imgEl as HTMLImageElement).offsetHeight || (imgEl as HTMLVideoElement).videoHeight || 230;
       const tmp = document.createElement("canvas");
       tmp.width = W; tmp.height = H;
       const tc = tmp.getContext("2d"); if (!tc) return;
@@ -472,24 +466,47 @@ export default function DashboardAI() {
           <div className="relative flex-shrink-0 overflow-hidden" style={{ height: 230, background: "#111827" }}>
 
             {VIDEO_AVATAR ? (
-              /* ── VIDEO MODE: idle + talk loops crossfaded ── */
+              /* ── VIDEO MODE: idle loop + canvas lip-sync overlay ── */
               <>
-                {/* Idle video — always playing, fades out when speaking */}
+                {/* Idle video — always playing, provides natural head motion & blinks */}
                 <video
                   ref={idleVideoRef} autoPlay loop muted playsInline
+                  crossOrigin="anonymous"
                   className="absolute inset-0 w-full h-full object-cover pointer-events-none"
-                  style={{ objectPosition: "center 8%", opacity: 1, transition: "opacity .45s cubic-bezier(.4,0,.2,1)", zIndex: 1 }}
+                  style={{
+                    objectPosition: "center 8%",
+                    zIndex: 1,
+                    animation: avatarState === "speaking"
+                      ? "dash-speak-bob 0.42s ease-in-out infinite alternate"
+                      : avatarState === "listening"
+                        ? "dash-listen-pulse 1.2s ease-in-out infinite"
+                        : "dash-breathe 5s ease-in-out infinite",
+                  }}
                 >
                   <source src={AVATAR_IDLE_VID} type="video/mp4" />
                 </video>
-                {/* Talk video — hidden until speaking */}
-                <video
-                  ref={talkVideoRef} autoPlay loop muted playsInline
-                  className="absolute inset-0 w-full h-full object-cover pointer-events-none"
-                  style={{ objectPosition: "center 8%", opacity: 0, transition: "opacity .35s cubic-bezier(.4,0,.2,1)", zIndex: 2 }}
-                >
-                  <source src={AVATAR_TALK_VID} type="video/mp4" />
-                </video>
+                {/* Canvas lip-sync overlay — driven by TTS audio amplitude in real time */}
+                <canvas
+                  ref={mouthCanvasRef}
+                  width={0} height={0}
+                  className="absolute inset-0 pointer-events-none"
+                  style={{ width: "100%", height: "100%", zIndex: 3 }}
+                />
+                {/* Eye blink overlays */}
+                <div className="absolute pointer-events-none" style={{
+                  width:"22%", height:"11%", left:"24%", top:"28%",
+                  borderRadius:"0 0 55% 55%/0 0 80% 80%",
+                  background:"linear-gradient(to bottom,rgba(18,12,8,0.02) 0%,rgba(18,12,8,0.9) 55%,rgba(18,12,8,0.88) 100%)",
+                  transform:"scaleY(0)", transformOrigin:"top center", zIndex:5,
+                  animation:"dash-blink 4.5s ease-in-out infinite",
+                }} />
+                <div className="absolute pointer-events-none" style={{
+                  width:"22%", height:"11%", left:"54%", top:"28%",
+                  borderRadius:"0 0 55% 55%/0 0 80% 80%",
+                  background:"linear-gradient(to bottom,rgba(18,12,8,0.02) 0%,rgba(18,12,8,0.9) 55%,rgba(18,12,8,0.88) 100%)",
+                  transform:"scaleY(0)", transformOrigin:"top center", zIndex:5,
+                  animation:"dash-blink 5.4s ease-in-out infinite",
+                }} />
               </>
             ) : (
               /* ── PHOTO MODE: static image + canvas lip-sync overlay ── */

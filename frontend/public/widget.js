@@ -69,18 +69,14 @@
     }
     if (sub) sub.textContent = STATUS_TEXT[state] || "";
 
-    // ── Video mode: crossfade idle ↔ talk video ─────────────────────────────
-    const talkVid = document.getElementById("wtai-vid-talk");
-    if (talkVid && photo) {
+    // ── Video mode: drive CSS animations on idle video (no crossfade) ─────────
+    if (photo && photo.tagName === "VIDEO") {
       if (state === "speaking") {
-        photo.style.opacity = "0";           // fade idle video out
-        talkVid.style.opacity = "1";         // fade talk video in
+        photo.style.animation = "wtai-speak-bob .42s ease-in-out infinite alternate";
       } else if (state === "listening") {
-        photo.style.opacity = "0.65";        // dim idle video slightly
-        talkVid.style.opacity = "0";
+        photo.style.animation = "wtai-listen-pulse 1.2s ease-in-out infinite";
       } else {
-        photo.style.opacity = "1";           // idle / thinking: full idle video
-        talkVid.style.opacity = "0";
+        photo.style.animation = "wtai-breathe 5s ease-in-out infinite";
       }
     }
 
@@ -453,16 +449,17 @@
     panel.id = "wtai-panel";
     const waveBarIds = Array.from({length:12}, (_,i) => `<span id="wtai-wb${i}" style="height:3px"></span>`).join("");
     // Decide avatar rendering mode:
-    //   VIDEO MODE  → two <video> loops (idle + talk) crossfaded on state change
+    //   VIDEO MODE  → single idle <video> loop + canvas lip-sync overlay (audio-driven)
     //   PHOTO MODE  → <img> + canvas mouth overlay + CSS blink eyes (fallback)
     const useVid = !!(cfg.avatarIdleVideo || cfg.avatarTalkVideo);
     const avatarMedia = useVid ? `
-        <video id="wtai-photo" class="wtai-photo av-idle" autoplay loop muted playsinline>
+        <video id="wtai-photo" class="wtai-photo av-idle" autoplay loop muted playsinline crossorigin="anonymous"
+          style="animation:wtai-breathe 5s ease-in-out infinite">
           <source src="${cfg.avatarIdleVideo || cfg.avatarTalkVideo}" type="video/mp4">
         </video>
-        ${cfg.avatarTalkVideo ? `<video id="wtai-vid-talk" class="wtai-photo-talk" autoplay loop muted playsinline>
-          <source src="${cfg.avatarTalkVideo}" type="video/mp4">
-        </video>` : ""}
+        <canvas id="wtai-mouth-cv" style="position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:3"></canvas>
+        <div class="wtai-blink-eye" id="wtai-blink-l"></div>
+        <div class="wtai-blink-eye" id="wtai-blink-r"></div>
     ` : `
         <img class="wtai-photo wtai-photo-static av-idle" id="wtai-photo" src="${cfg.avatarUrl}" crossorigin="anonymous" alt="${name}" draggable="false">
         <canvas id="wtai-mouth-cv" style="position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:3"></canvas>
