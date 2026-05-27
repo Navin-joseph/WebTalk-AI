@@ -9,7 +9,8 @@ interface ApiKey { id: string; name: string; key_prefix: string; created_at: str
 
 /** Build the ready-to-paste embed snippet for a given API key. */
 function buildSnippet(apiKey: string) {
-  return `<!-- WebTalk AI Widget — paste before </body> -->
+  return `<!-- WebTalk AI Widget v4 — paste before </body> -->
+<!-- Real-time lip-sync: 5-viseme audio-driven animation, no external APIs needed -->
 <script defer src="https://web-talk-ai.vercel.app/widget.js"></script>
 <script>
   document.addEventListener("DOMContentLoaded", function () {
@@ -20,15 +21,17 @@ function buildSnippet(apiKey: string) {
       theme:    "purple",          // "purple" | "blue" | "green" | "dark"
       position: "bottom-right",   // "bottom-right" | "bottom-left"
 
-      // ── Neural lip-sync avatar (D-ID Streams) ─────────────────────────
-      // Requires DID_API_KEY set in your backend environment variables.
-      // Change didSourceUrl to the public URL of your own avatar photo.
-      didEnabled:   true,
-      didSourceUrl: "https://web-talk-ai.vercel.app/avatar.jpg",
+      // ── Avatar ────────────────────────────────────────────────────────
+      // avatarUrl: URL of the photo shown in the widget header
+      // avatarIdleVideo: (optional) short looping .mp4 for idle animation
+      avatarUrl: "https://web-talk-ai.vercel.app/avatar.jpg",
 
-      // ── Voice ─────────────────────────────────────────────────────────
-      voiceEnabled: true,          // show mic button for voice input
-      ttsAutoPlay:  true,          // auto-speak AI replies
+      // ── Voice & real-time lip-sync ────────────────────────────────────
+      // voiceEnabled: show mic button for speech input
+      // ttsAutoPlay:  AI replies spoken aloud with live viseme lip-sync
+      //               (AA / IH / OU / EE / OH shapes driven by Web Audio API)
+      voiceEnabled: true,
+      ttsAutoPlay:  true,
     });
   });
 </script>`;
@@ -207,13 +210,13 @@ export default function ApiKeysPage() {
           </div>
         </div>
 
-        {/* D-ID notice */}
+        {/* Lip-sync info notice */}
         <div className="flex items-start gap-2.5 bg-violet-50 border border-violet-100 rounded-xl p-3.5 mb-4 mt-3">
           <Sparkles size={15} className="text-violet-500 mt-0.5 flex-shrink-0" />
           <p className="text-xs text-violet-700 leading-relaxed">
-            <strong>Neural lip-sync is enabled</strong> — the avatar&apos;s lips will move in sync with every AI reply using D-ID Streams.
-            Make sure <code className="bg-violet-100 px-1 rounded">DID_API_KEY</code> is set in your Render backend environment variables.
-            Change <code className="bg-violet-100 px-1 rounded">didSourceUrl</code> to any publicly accessible photo URL to use a custom avatar face.
+            <strong>Real-time lip-sync is built in</strong> — the avatar&apos;s mouth animates live as the AI speaks, driven entirely
+            by Web Audio API frequency analysis (AA / IH / OU / EE / OH visemes). No external APIs, no API keys, no latency.
+            Works on any website out of the box.
           </p>
         </div>
 
