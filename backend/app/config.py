@@ -46,9 +46,6 @@ class Settings(BaseSettings):
     # TTS provider: "elevenlabs" | "cartesia"
     tts_provider: str = "elevenlabs"
 
-    # D-ID Streams (real-time neural lip sync)
-    did_api_key: str = ""
-
     # CORS
     allowed_origins: list[str] = ["http://localhost:3000"]
 
