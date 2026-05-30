@@ -1,15 +1,18 @@
 "use strict";
 /**
- * WebTalk AI Widget  v4.0.0
+ * WebTalk AI Widget  v4.1.0
  * ─────────────────────────
- * Embeddable AI assistant with real-time, audio-driven lip-sync.
+ * Embeddable AI assistant with real-time, photo-based puppet lip-sync.
  *
  * Lip-sync engine:
  *   • Web Audio API frequency analysis → 5 viseme weights (AA / IH / OU / EE / OH)
- *   • Each viseme has a distinct bezier-curve mouth shape on a canvas overlay
- *   • All 5 shapes are blended simultaneously for smooth, natural motion
- *   • Fast attack (0.35) + slow release (0.20) for organic feel
- *   • No external APIs required — runs 100 % in-browser
+ *   • Canvas puppet-warp: the real photo pixels SPLIT at the mouth line;
+ *     the lower face (lower lip + chin) shifts down during speech so the
+ *     ACTUAL face texture moves — no fake bezier shapes drawn on top.
+ *   • FaceDetector API (Chrome/Edge) auto-locates the exact mouth Y.
+ *   • Idle breathing, head sway, and speaking bob via canvas transforms.
+ *   • Fast attack + slow release interpolation for organic feel.
+ *   • No external APIs — runs 100 % in-browser.
  */
 (() => {
   const V = "4.0.0";
@@ -33,18 +36,24 @@
   let _ttsResolve = null;
   let _ttsFetchAbort = null;
 
-  // ── Lip-sync state ────────────────────────────────────────────────────────────
-  let _lipAudioCtx  = null;
-  let _lipAnimId    = null;
-  let _lipAnalyser  = null;
-  let _lipSource    = null;
-  let _mouthCanvas  = null;
-  let _mouthCtx     = null;
-  let _skinColor    = { r: 188, g: 150, b: 128 };
+  // ── Lip-sync / puppet-warp state ──────────────────────────────────────────────
+  let _lipAudioCtx = null;
+  let _lipAnimId   = null;     // audio-analysis RAF id
+  let _lipAnalyser = null;
+  let _lipSource   = null;
 
-  // Smoothed per-viseme weights (5 visemes + overall amplitude)
-  const _vw = { aa: 0, ih: 0, ou: 0, ee: 0, oh: 0 };   // current (smoothed)
-  const _vt = { aa: 0, ih: 0, ou: 0, ee: 0, oh: 0 };   // target from analyser
+  // Full-canvas puppet renderer (replaces both the photo <img> and the overlay)
+  let _photoCanvas = null;     // <canvas id="wtai-photo">
+  let _photoCtx    = null;
+  let _sourceImg   = null;     // hidden <img id="wtai-photo-src"> for pixel access
+  let _mouthCfg    = { centerY: 0, mouthW: 0 };   // detected mouth position
+  let _idleRafId   = null;     // idle-animation + puppet RAF id
+  let _idleTime    = 0;        // accumulated time (seconds)
+  let _idleLastT   = 0;        // last timestamp for delta
+
+  // Smoothed per-viseme weights
+  const _vw = { aa: 0, ih: 0, ou: 0, ee: 0, oh: 0 };  // current (smoothed)
+  const _vt = { aa: 0, ih: 0, ou: 0, ee: 0, oh: 0 };  // target from analyser
   let _smoothAmp = 0;
 
   const NUM_BARS = 12;
@@ -269,16 +278,179 @@
     mute:  `<svg viewBox="0 0 24 24"><path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73l-9-9L4.27 3zM12 4L9.91 6.09 12 8.18V4z"/></svg>`,
   };
 
-  // ── Mouth canvas — 5-viseme blended lip sync ────────────────────────────────
+  // ── Puppet-warp lip sync ─────────────────────────────────────────────────────
   //
-  // Architecture:
-  //   1. Web Audio API analyses the playing audio
-  //   2. Frequency bands map to 5 viseme weights (AA / IH / OU / EE / OH)
-  //   3. Each viseme defines a distinct mouth shape via bezier curves
-  //   4. All 5 shapes are drawn at their blended weight simultaneously
-  //   5. Smooth interpolation prevents robotic mouth snapping
+  // How it works:
+  //   1. A <canvas> replaces the photo <img> as the visible avatar.
+  //   2. A hidden <img> stores the source pixels (CORS-enabled for drawImage).
+  //   3. An always-on RAF loop renders idle animation (breathing/sway) via
+  //      canvas ctx.translate — even when the AI is not speaking.
+  //   4. During TTS, the Web Audio API drives 5 viseme weights (AA/IH/OU/EE/OH).
+  //   5. Each frame splits the photo at the mouth center-Y:
+  //        • Upper face  → drawn at original position
+  //        • Dark cavity → ellipse gradient fills the opening gap
+  //        • Teeth       → shown for AA / OH / EE when jaw is open enough
+  //        • Lower face  → drawn shifted DOWN by jawDrop pixels
+  //      → The real skin, lower lip shape, and chin move together.
 
   function _getBar(i) { return document.getElementById("wtai-wb" + i); }
+
+  // ── One-time: set up canvas + detect mouth position ───────────────────────────
+  function _initPhotoCanvas() {
+    _photoCanvas = document.getElementById("wtai-photo");
+    if (!_photoCanvas || _photoCanvas.tagName !== "CANVAS") return;
+    const wrap = document.getElementById("wtai-photo-wrap");
+    const W = wrap ? (wrap.offsetWidth  || 380) : 380;
+    const H = wrap ? (wrap.offsetHeight || 230) : 230;
+    _photoCanvas.width  = W;
+    _photoCanvas.height = H;
+    _photoCtx = _photoCanvas.getContext("2d");
+
+    const src = document.getElementById("wtai-photo-src");
+    if (!src) return;
+    const onLoad = () => {
+      _sourceImg = src;
+      _detectMouth(src, W, H).then(cfg => {
+        _mouthCfg = cfg;
+        _startIdleLoop();
+      });
+    };
+    if (src.complete && src.naturalWidth) onLoad();
+    else { src.onload = onLoad; }
+  }
+
+  // ── Auto-detect mouth centre via FaceDetector (Chrome/Edge) ──────────────────
+  async function _detectMouth(imgEl, W, H) {
+    const natW = imgEl.naturalWidth  || W;
+    const natH = imgEl.naturalHeight || H;
+    const sx = W / natW, sy = H / natH;
+    try {
+      if (!window.FaceDetector) throw new Error("no FaceDetector");
+      const fd    = new FaceDetector({ maxDetectedFaces: 1, fastMode: false });
+      const faces = await fd.detect(imgEl);
+      if (!faces.length) throw new Error("no face");
+      const face   = faces[0];
+      const mouthL = face.landmarks?.find(l => l.type === "mouth");
+      if (mouthL) {
+        return { centerY: mouthL.location.y * sy, mouthW: face.boundingBox.width * 0.36 * sx };
+      }
+      const bb = face.boundingBox;
+      return { centerY: (bb.top + bb.height * 0.78) * sy, mouthW: bb.width * 0.34 * sx };
+    } catch {
+      // Fallback — works well for portrait/headshot crops
+      return { centerY: H * 0.76, mouthW: W * 0.24 };
+    }
+  }
+
+  // ── Start the always-on idle + puppet RAF loop ────────────────────────────────
+  function _startIdleLoop() {
+    if (_idleRafId) return;
+    _idleLastT = performance.now();
+    function tick(now) {
+      _idleRafId = requestAnimationFrame(tick);
+      const delta = Math.min((now - _idleLastT) / 1000, 0.05);
+      _idleLastT  = now;
+      _idleTime  += delta;
+      _renderPuppetFrame();
+    }
+    _idleRafId = requestAnimationFrame(tick);
+  }
+
+  function _stopIdleLoop() {
+    if (_idleRafId) { cancelAnimationFrame(_idleRafId); _idleRafId = null; }
+  }
+
+  // ── Render one puppet frame (idle anim + optional jaw drop) ──────────────────
+  function _renderPuppetFrame() {
+    if (!_photoCtx || !_photoCanvas || !_sourceImg) return;
+    const ctx = _photoCtx;
+    const W   = _photoCanvas.width, H = _photoCanvas.height;
+    ctx.clearRect(0, 0, W, H);
+
+    // Idle transform (breathing + head sway + speaking bob)
+    ctx.save();
+    const breathe = Math.sin(_idleTime * 0.42) * 1.4;
+    const swayX   = Math.sin(_idleTime * 0.31 + 1.2) * 1.1 + Math.sin(_idleTime * 0.67) * 0.4;
+    const swayY   = Math.sin(_idleTime * 0.24) * 0.7;
+    const bob     = speaking ? Math.sin(_idleTime * 14.8) * (_smoothAmp * 2.2) : 0;
+    const bScale  = 1 + breathe * 0.0003;
+    ctx.translate(W / 2 + swayX, H / 2 + swayY + breathe + bob);
+    ctx.scale(bScale, bScale);
+    ctx.translate(-W / 2, -H / 2);
+
+    if (_smoothAmp < 0.025 || _mouthCfg.centerY === 0) {
+      ctx.drawImage(_sourceImg, 0, 0, W, H);
+    } else {
+      _drawPuppetWarp(W, H);
+    }
+    ctx.restore();
+  }
+
+  // ── Puppet warp: split photo at mouth, shift lower face down ─────────────────
+  function _drawPuppetWarp(W, H) {
+    const ctx = _photoCtx, img = _sourceImg;
+    const { centerY, mouthW } = _mouthCfg;
+    const lipH = mouthW * 0.115;
+
+    // Jaw opening — blended per-viseme contribution
+    const wSum = _vw.aa + _vw.ih + _vw.ou + _vw.ee + _vw.oh;
+    const jawF = wSum > 0.01
+      ? (_vw.aa*1.00 + _vw.ih*0.58 + _vw.ou*0.40 + _vw.ee*0.65 + _vw.oh*0.82) / wSum
+      : 0.68;
+    const maxJaw  = mouthW * 0.30;
+    const jawDrop = Math.max(0, _smoothAmp * maxJaw * (0.32 + jawF * 0.68));
+
+    // Cavity width: EE widens, OU narrows
+    const wMod = 1.0 + _vw.ee * 0.20 - _vw.ou * 0.28;
+    const cavHW = Math.max(2, mouthW * 0.52 * wMod * 0.5);
+    const splitY = centerY - lipH * 0.25;
+
+    // 1. Upper face
+    ctx.drawImage(img, 0, 0, W, splitY, 0, 0, W, splitY);
+
+    // 2. Dark mouth cavity
+    if (jawDrop > 0.8) {
+      const cCX = W * 0.5, cCY = splitY + jawDrop * 0.44;
+      const cHH  = Math.max(1, jawDrop * 0.60 + 1);
+      ctx.save();
+      ctx.beginPath();
+      ctx.ellipse(cCX, cCY, cavHW, cHH, 0, 0, Math.PI * 2);
+      ctx.clip();
+      const g = ctx.createRadialGradient(cCX, cCY - jawDrop*0.1, 0, cCX, cCY, Math.max(1, cavHW));
+      g.addColorStop(0,    "rgba(10,3,3,1)");
+      g.addColorStop(0.5,  "rgba(20,7,7,0.98)");
+      g.addColorStop(0.82, "rgba(36,12,12,0.85)");
+      g.addColorStop(1,    "rgba(55,18,18,0.08)");
+      ctx.fillStyle = g;
+      ctx.fillRect(0, splitY - 4, W, jawDrop * 2 + 10);
+      ctx.restore();
+    }
+
+    // 3. Teeth (AA / OH / EE)
+    const tBlend = _vw.aa*1.0 + _vw.oh*0.75 + _vw.ee*0.55;
+    const tAlpha = Math.max(0, (tBlend - 0.15) / 0.85);
+    if (tAlpha > 0.04 && jawDrop > lipH * 0.5) {
+      const tw = cavHW * 2 * 0.70 * (1 - _vw.ou * 0.55);
+      const th = Math.min(jawDrop * 0.28, lipH * 0.92) * tAlpha;
+      const ty = splitY - th * 0.40;
+      const tg = ctx.createLinearGradient(W/2, ty, W/2, ty+th);
+      tg.addColorStop(0, `rgba(252,249,245,${(0.93*tAlpha).toFixed(2)})`);
+      tg.addColorStop(1, `rgba(236,229,219,${(0.86*tAlpha).toFixed(2)})`);
+      ctx.fillStyle = tg;
+      ctx.beginPath(); ctx.rect(W/2 - tw/2, ty, tw, th); ctx.fill();
+      ctx.strokeStyle = `rgba(198,190,176,${(0.26*tAlpha).toFixed(2)})`;
+      ctx.lineWidth = 0.8;
+      for (let i=1;i<=3;i++) {
+        const tx = W/2 - tw/2 + (tw/4)*i;
+        ctx.beginPath(); ctx.moveTo(tx, ty+th*0.08); ctx.lineTo(tx, ty+th*0.90); ctx.stroke();
+      }
+    }
+
+    // 4. Lower face shifted down (real skin pixels move)
+    const lSrcY = Math.max(0, centerY - lipH * 0.60);
+    const lH    = H - lSrcY;
+    if (lH > 0) ctx.drawImage(img, 0, lSrcY, W, lH, 0, lSrcY + jawDrop, W, lH);
+  }
 
   function _initMouthCanvas(photoEl) {
     const wrap = document.getElementById("wtai-photo-wrap");
@@ -464,104 +636,84 @@
     ctx.beginPath(); ctx.ellipse(cx, btmY - baseH * 0.22, baseW * 0.17, baseH * 0.065, 0, 0, Math.PI * 2); ctx.fill();
   }
 
-  // ── Start lip sync from audio element ─────────────────────────────────────────
+  // ── Start audio analysis — idle RAF loop already handles the canvas render ────
   function startLipSync(audioEl) {
     stopLipSync();
-    const photo = document.getElementById("wtai-photo");
-    if (photo && !_mouthCanvas) _initMouthCanvas(photo);
-    else if (photo && _mouthCanvas && _mouthCanvas.width === 0) _initMouthCanvas(photo);
+    // Ensure canvas is ready (lazy init if not yet done)
+    if (!_photoCtx) _initPhotoCanvas();
 
     try {
       if (!_lipAudioCtx || _lipAudioCtx.state === "closed") {
         _lipAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
       }
       if (_lipAudioCtx.state === "suspended") _lipAudioCtx.resume().catch(() => {});
-
       _lipAnalyser = _lipAudioCtx.createAnalyser();
       _lipAnalyser.fftSize               = 512;
       _lipAnalyser.smoothingTimeConstant = 0.65;
-
       _lipSource = _lipAudioCtx.createMediaElementSource(audioEl);
       _lipSource.connect(_lipAnalyser);
       _lipAnalyser.connect(_lipAudioCtx.destination);
     } catch { return; }
 
-    const bufLen = _lipAnalyser.frequencyBinCount;   // 256
+    const bufLen = _lipAnalyser.frequencyBinCount;
     const data   = new Uint8Array(bufLen);
-    const sr     = _lipAudioCtx.sampleRate;
-    const binHz  = sr / _lipAnalyser.fftSize;
-
-    const bIdx   = (hz) => Math.min(bufLen - 1, Math.max(0, Math.round(hz / binHz)));
+    const binHz  = _lipAudioCtx.sampleRate / _lipAnalyser.fftSize;
+    const bIdx   = (hz) => Math.min(bufLen-1, Math.max(0, Math.round(hz/binHz)));
     const bAvg   = (lo, hi) => {
       const a = bIdx(lo), b = bIdx(hi);
-      let s = 0; for (let i = a; i <= b; i++) s += data[i];
-      return s / Math.max(1, b - a + 1) / 255;
+      let s = 0; for (let i=a; i<=b; i++) s += data[i];
+      return s / Math.max(1, b-a+1) / 255;
     };
 
     function tick() {
       _lipAnimId = requestAnimationFrame(tick);
       _lipAnalyser.getByteFrequencyData(data);
 
-      // ── Waveform bars ──────────────────────────────────────────────────
-      for (let i = 0; i < NUM_BARS; i++) {
+      // Waveform bars
+      for (let i=0; i<NUM_BARS; i++) {
         const bar = _getBar(i);
-        if (bar) bar.style.height = Math.max(3, Math.round((data[Math.floor(2 + i * 4)] / 255) * 24)) + "px";
+        if (bar) bar.style.height = Math.max(3, Math.round((data[Math.floor(2+i*4)]/255)*24)) + "px";
       }
 
-      // ── Overall amplitude ──────────────────────────────────────────────
+      // Overall amplitude
       let sumSq = 0;
       const lo = bIdx(80), hi = bIdx(4000);
-      for (let i = lo; i <= hi; i++) sumSq += data[i] * data[i];
-      const rms = Math.sqrt(sumSq / Math.max(1, hi - lo + 1)) / 255;
+      for (let i=lo; i<=hi; i++) sumSq += data[i]*data[i];
+      const rms = Math.sqrt(sumSq / Math.max(1, hi-lo+1)) / 255;
       const tgt = rms > _smoothAmp ? rms : _smoothAmp * 0.84;
       _smoothAmp += (tgt - _smoothAmp) * 0.28;
-      const amp = Math.min(1, _smoothAmp * 3.8);
+      _smoothAmp  = Math.min(1, _smoothAmp * 3.8);
 
-      if (amp < 0.03) {
-        // Silent — decay all visemes
+      // Viseme targets from frequency bands
+      if (_smoothAmp < 0.03) {
         for (const k of Object.keys(_vt)) _vt[k] = 0;
       } else {
-        // ── Frequency band → viseme targets ───────────────────────────────
-        //   ou: rounded back vowels    300–700 Hz
-        //   oh: open-mid back          500–1 100 Hz
-        //   aa: open front vowel       700–1 500 Hz
-        //   ee: close front vowel      1 200–2 800 Hz
-        //   ih: near-close front       1 800–3 800 Hz
-        const eOU = bAvg(300,  700);
-        const eOH = bAvg(500,  1100);
-        const eAA = bAvg(700,  1500);
-        const eEE = bAvg(1200, 2800);
-        const eIH = bAvg(1800, 3800);
-        const total = eOU + eOH + eAA + eEE + eIH + 1e-6;
-        _vt.ou = (eOU / total) * amp;
-        _vt.oh = (eOH / total) * amp;
-        _vt.aa = (eAA / total) * amp;
-        _vt.ee = (eEE / total) * amp;
-        _vt.ih = (eIH / total) * amp;
+        const eOU=bAvg(300,700), eOH=bAvg(500,1100), eAA=bAvg(700,1500);
+        const eEE=bAvg(1200,2800), eIH=bAvg(1800,3800);
+        const tot = eOU+eOH+eAA+eEE+eIH+1e-6;
+        _vt.ou=(eOU/tot)*_smoothAmp; _vt.oh=(eOH/tot)*_smoothAmp;
+        _vt.aa=(eAA/tot)*_smoothAmp; _vt.ee=(eEE/tot)*_smoothAmp;
+        _vt.ih=(eIH/tot)*_smoothAmp;
       }
 
-      // ── Smooth interpolation (fast attack, slow release) ──────────────
+      // Smooth interpolation (fast attack, slow release)
       for (const k of Object.keys(_vw)) {
-        const t = _vt[k];
-        const alpha = t > _vw[k] ? 0.38 : 0.20;
-        _vw[k] += (t - _vw[k]) * alpha;
+        const alpha = _vt[k] > _vw[k] ? 0.38 : 0.20;
+        _vw[k] += (_vt[k] - _vw[k]) * alpha;
       }
-
-      _drawMouth();
+      // _renderPuppetFrame() is driven by _idleRafId — no duplicate draw needed
     }
     tick();
   }
 
+  // Stop audio analysis only; idle/puppet loop keeps running
   function stopLipSync() {
     if (_lipAnimId) { cancelAnimationFrame(_lipAnimId); _lipAnimId = null; }
     try { if (_lipSource) { _lipSource.disconnect(); _lipSource = null; } } catch {}
     _smoothAmp = 0;
     for (const k of Object.keys(_vw)) _vw[k] = 0;
     for (const k of Object.keys(_vt)) _vt[k] = 0;
-    if (_mouthCtx && _mouthCanvas) _mouthCtx.clearRect(0, 0, _mouthCanvas.width, _mouthCanvas.height);
-    for (let i = 0; i < NUM_BARS; i++) {
-      const b = _getBar(i); if (b) b.style.height = "3px";
-    }
+    for (let i=0; i<NUM_BARS; i++) { const b=_getBar(i); if(b) b.style.height="3px"; }
   }
 
   // ── Build DOM ─────────────────────────────────────────────────────────────────
@@ -581,22 +733,14 @@
 
     const waveBarIds = Array.from({length: NUM_BARS}, (_,i) => `<span id="wtai-wb${i}" style="height:3px"></span>`).join("");
 
-    // Avatar: video loop or photo, always with canvas mouth overlay + blink eyes
-    const useVid = !!(cfg.avatarIdleVideo);
-    const avatarMedia = useVid ? `
-        <video id="wtai-photo" class="wtai-photo av-idle" autoplay loop muted playsinline crossorigin="anonymous"
-          style="animation:wtai-breathe 5s ease-in-out infinite">
-          <source src="${cfg.avatarIdleVideo}" type="video/mp4">
-        </video>
-    ` : `
-        <img class="wtai-photo wtai-photo-static av-idle" id="wtai-photo" src="${cfg.avatarUrl}"
-          crossorigin="anonymous" alt="${name}" draggable="false">
-    `;
-
     panel.innerHTML = `
       <div class="wtai-photo-wrap av-idle" id="wtai-photo-wrap">
-        ${avatarMedia}
-        <canvas id="wtai-mouth-cv" style="position:absolute;top:0;left:0;width:100%;height:100%;pointer-events:none;z-index:3"></canvas>
+        <!-- Hidden source image — used only for pixel access by the puppet warp -->
+        <img id="wtai-photo-src" src="${cfg.avatarUrl}" crossorigin="anonymous"
+          style="display:none;position:absolute" alt="">
+        <!-- Full canvas replaces the <img> — renders photo + idle animation + puppet warp -->
+        <canvas id="wtai-photo" class="wtai-photo av-idle"
+          style="position:absolute;inset:0;width:100%;height:100%;display:block;z-index:1"></canvas>
         <div class="wtai-blink-eye" id="wtai-blink-l"></div>
         <div class="wtai-blink-eye" id="wtai-blink-r"></div>
         <div class="wtai-photo-glow" id="wtai-photo-glow"></div>
@@ -713,15 +857,18 @@
     if (!panel || !launcher) return;
     panel.classList.toggle("open", panelOpen);
     if (panelOpen) {
-      const { p, a } = cfg.theme;
       launcher.style.background = "#334155";
       launcher.innerHTML = ICO.close;
       setTimeout(() => inputEl?.focus(), 80);
+      // Init canvas + start idle loop on first open
+      if (!_photoCtx) _initPhotoCanvas();
+      else if (!_idleRafId) _startIdleLoop();
     } else {
       const { p, a } = cfg.theme;
       launcher.style.background = `linear-gradient(135deg,${p},${a})`;
       launcher.innerHTML = ICO.chat;
       stopSpeaking();
+      _stopIdleLoop();   // free the RAF while panel is closed
     }
   }
 
