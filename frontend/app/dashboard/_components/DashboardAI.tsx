@@ -1,20 +1,14 @@
 "use client";
 /**
- * DashboardAI  —  Real-time talking-face AI assistant (dashboard edition)
+ * DashboardAI  —  Real-time Simli.ai talking-face AI assistant
  *
- * Avatar pipeline (auto-selected):
+ * Avatar: Simli.ai WebRTC — realistic human face streaming live.
+ * Audio plays locally; PCM-16 is sent to Simli for lip sync.
+ * Waveform bars driven by local Web Audio analysis.
  *
- *   PRIMARY   → Simli.ai WebRTC  (set NEXT_PUBLIC_SIMLI_API_KEY + _FACE_ID)
- *               Real-time video stream of a realistic human face speaking
- *               in sync with TTS audio.  Free tier: 100 min/month.
- *
- *   FALLBACK  → Photo puppet-warp  (always available, no API key needed)
- *               Canvas splits the real avatar.jpg at the detected mouth
- *               line and shifts the lower-face pixels during speech.
- *
- * Audio always plays locally for clean sound + waveform bars.
- * When Simli is active, the same audio is also converted to PCM-16 and
- * sent to Simli so the video lips stay in sync.
+ * Required env vars (Vercel):
+ *   NEXT_PUBLIC_SIMLI_API_KEY
+ *   NEXT_PUBLIC_SIMLI_FACE_ID
  */
 
 import { useState, useEffect, useRef, useCallback } from "react";
@@ -24,16 +18,13 @@ import {
 } from "lucide-react";
 import { useAudioLipSync } from "@/hooks/useAudioLipSync";
 import { blobToPCM16 }    from "@/hooks/useBlobToPCM16";
-import { PhotoLipSyncAvatar, type PhotoLipSyncHandle } from "./PhotoLipSyncAvatar";
-import { SimliAvatar,         type SimliAvatarHandle }  from "./SimliAvatar";
+import { SimliAvatar, type SimliAvatarHandle } from "./SimliAvatar";
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
-const API_URL    = process.env.NEXT_PUBLIC_API_URL          ?? "http://localhost:8000";
-const AVATAR_URL = "/avatar.jpg";
-const SIMLI_KEY  = process.env.NEXT_PUBLIC_SIMLI_API_KEY    ?? "";
-const SIMLI_FACE = process.env.NEXT_PUBLIC_SIMLI_FACE_ID    ?? "";
-const USE_SIMLI  = !!(SIMLI_KEY && SIMLI_FACE);
+const API_URL   = process.env.NEXT_PUBLIC_API_URL       ?? "http://localhost:8000";
+const SIMLI_KEY = process.env.NEXT_PUBLIC_SIMLI_API_KEY ?? "";
+const SIMLI_FACE= process.env.NEXT_PUBLIC_SIMLI_FACE_ID ?? "";
 
 const NUM_WAVE_BARS = 12;
 
@@ -54,7 +45,6 @@ export default function DashboardAI() {
   const [avatarState, setAvatarState] = useState<AvatarState>("idle");
   const [token, setToken]             = useState("");
   const [ttsEnabled, setTtsEnabled]   = useState(true);
-  /** true = Simli WebRTC connected; false = puppet-warp fallback active */
   const [simliReady, setSimliReady]   = useState(false);
 
   const sessionId      = useRef(`dash_${Date.now()}_${Math.random().toString(36).slice(2)}`);
@@ -86,11 +76,10 @@ export default function DashboardAI() {
   // Waveform bars
   const waveBarRefs = useRef<(HTMLSpanElement | null)[]>(Array(NUM_WAVE_BARS).fill(null));
 
-  // Avatar handles
-  const puppetRef = useRef<PhotoLipSyncHandle>(null);
-  const simliRef  = useRef<SimliAvatarHandle>(null);
+  // Simli avatar handle
+  const simliRef = useRef<SimliAvatarHandle>(null);
 
-  // Audio lip-sync hook (drives puppet-warp OR waveform bars when Simli active)
+  // Audio analysis — drives waveform bars + sends PCM-16 to Simli for lip sync
   const { start: startLipSyncAudio, stop: stopLipSyncAudio } = useAudioLipSync();
 
   // ── Auth ──────────────────────────────────────────────────────────────────
@@ -112,10 +101,9 @@ export default function DashboardAI() {
     }
   }, [open, messages]);
 
-  // ── Lip-sync (drives puppet-warp when Simli is not active) ────────────────
+  // ── Audio analysis — waveform bars only (Simli handles its own lip sync) ─────
   const stopLipSync = useCallback(() => {
     stopLipSyncAudio();
-    puppetRef.current?.reset();
     waveBarRefs.current.forEach(b => { if (b) b.style.height = "3px"; });
   }, [stopLipSyncAudio]);
 
@@ -126,10 +114,6 @@ export default function DashboardAI() {
         const bar = waveBarRefs.current[i];
         if (bar) bar.style.height = h + "px";
       });
-      // Drive puppet-warp only when Simli is not active
-      if (!simliReadyRef.current) {
-        puppetRef.current?.updateViseme(frame.weights, frame.amplitude);
-      }
     });
   }, [stopLipSync, startLipSyncAudio]);
 
@@ -476,45 +460,32 @@ export default function DashboardAI() {
           {/* ── Avatar header ── */}
           <div className="relative flex-shrink-0 overflow-hidden" style={{ height: 230, background: "#111827" }}>
 
-            {/* ── Simli real-time video (primary — requires API key) ── */}
-            {USE_SIMLI && (
-              <SimliAvatar
-                ref={simliRef}
-                apiKey={SIMLI_KEY}
-                faceId={SIMLI_FACE}
-                onReady={() => setSimliReady(true)}
-                onError={() => setSimliReady(false)}
-                className="absolute inset-0"
-                style={{ zIndex: 2 }}
-                fallback={
-                  /* Show puppet-warp while Simli is connecting */
-                  <PhotoLipSyncAvatar
-                    ref={puppetRef}
-                    photoUrl={AVATAR_URL}
-                    width={380} height={230}
-                    avatarState={avatarState}
-                    className="absolute inset-0"
-                    style={{ zIndex: 1 }}
-                  />
-                }
-              />
-            )}
+            {/* ── Simli WebRTC video — full-area, no photo fallback ── */}
+            <SimliAvatar
+              ref={simliRef}
+              apiKey={SIMLI_KEY}
+              faceId={SIMLI_FACE}
+              onReady={() => setSimliReady(true)}
+              onError={() => setSimliReady(false)}
+              className="absolute inset-0"
+              style={{ zIndex: 2 }}
+            />
 
-            {/* ── Photo puppet-warp (fallback when Simli not configured) ── */}
-            {!USE_SIMLI && (
-              <PhotoLipSyncAvatar
-                ref={puppetRef}
-                photoUrl={AVATAR_URL}
-                width={380} height={230}
-                avatarState={avatarState}
-                className="absolute inset-0"
-                style={{ zIndex: 1 }}
-              />
+            {/* ── Clean loading screen while WebRTC connects (~3 s) ── */}
+            {!simliReady && (
+              <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 pointer-events-none"
+                style={{ background: "linear-gradient(160deg,#1e1b4b 0%,#111827 60%,#0f172a 100%)", zIndex: 1 }}>
+                {/* Animated ring */}
+                <div className="relative w-14 h-14">
+                  <div className="absolute inset-0 rounded-full border-2 border-violet-500/20" />
+                  <div className="absolute inset-0 rounded-full border-2 border-transparent border-t-violet-400"
+                    style={{ animation: "dash-spin 1s linear infinite" }} />
+                  <div className="absolute inset-2 rounded-full"
+                    style={{ background: "radial-gradient(circle,rgba(124,58,237,0.15) 0%,transparent 70%)" }} />
+                </div>
+                <p className="text-[11px] font-semibold text-white/50 tracking-wide uppercase">Connecting avatar</p>
+              </div>
             )}
-
-            {/* Eye blink overlays */}
-            <div className="absolute pointer-events-none" style={{ width:"22%",height:"11%",left:"24%",top:"28%",borderRadius:"0 0 55% 55%/0 0 80% 80%",background:"linear-gradient(to bottom,rgba(18,12,8,0.02) 0%,rgba(18,12,8,0.9) 55%,rgba(18,12,8,0.88) 100%)",transform:"scaleY(0)",transformOrigin:"top center",zIndex:5,animation:"dash-blink 4.5s ease-in-out infinite" }} />
-            <div className="absolute pointer-events-none" style={{ width:"22%",height:"11%",left:"54%",top:"28%",borderRadius:"0 0 55% 55%/0 0 80% 80%",background:"linear-gradient(to bottom,rgba(18,12,8,0.02) 0%,rgba(18,12,8,0.9) 55%,rgba(18,12,8,0.88) 100%)",transform:"scaleY(0)",transformOrigin:"top center",zIndex:5,animation:"dash-blink 5.4s ease-in-out infinite" }} />
 
             {/* State glow border */}
             <div className="absolute inset-0 pointer-events-none transition-all duration-300" style={{
@@ -699,7 +670,7 @@ export default function DashboardAI() {
 
       <style>{`
         @keyframes dash-dot-pulse { 0%,100%{transform:scale(1)} 50%{transform:scale(1.5)} }
-        @keyframes dash-blink     { 0%,93%,100%{transform:scaleY(0)} 95.5%,96.5%{transform:scaleY(1)} 97%{transform:scaleY(0.08)} 98.5%{transform:scaleY(0.92)} }
+        @keyframes dash-spin      { to{transform:rotate(360deg)} }
       `}</style>
     </div>
   );

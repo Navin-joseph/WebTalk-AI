@@ -49,8 +49,6 @@ interface Props {
   faceId: string;
   onReady?: () => void;
   onError?: (err: Error) => void;
-  /** Fallback element shown while connecting / on error */
-  fallback?: React.ReactNode;
   className?: string;
   style?: React.CSSProperties;
 }
@@ -58,7 +56,7 @@ interface Props {
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export const SimliAvatar = forwardRef<SimliAvatarHandle, Props>(
-  function SimliAvatar({ apiKey, faceId, onReady, onError, fallback, className, style }, ref) {
+  function SimliAvatar({ apiKey, faceId, onReady, onError, className, style }, ref) {
     const videoRef  = useRef<HTMLVideoElement>(null);
     const audioRef  = useRef<HTMLAudioElement>(null);
     const clientRef = useRef<import("simli-client").SimliClient | null>(null);
@@ -204,21 +202,7 @@ export const SimliAvatar = forwardRef<SimliAvatarHandle, Props>(
         {/* Muted audio — we play TTS locally for timing; this prevents double sound */}
         <audio ref={audioRef} autoPlay muted />
 
-        {/* Fallback / loading overlay */}
-        {status !== "ready" && fallback && (
-          <div className="absolute inset-0" style={{ zIndex: 0 }}>
-            {fallback}
-          </div>
-        )}
-
-        {/* Connecting indicator */}
-        {status === "connecting" && (
-          <div className="absolute bottom-16 left-1/2 -translate-x-1/2 flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium text-white"
-            style={{ background: "rgba(0,0,0,.5)", backdropFilter: "blur(6px)", zIndex: 20 }}>
-            <span className="w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
-            Connecting avatar…
-          </div>
-        )}
+        {/* No loading overlay — parent DashboardAI renders the loading screen */}
       </>
     );
   }
