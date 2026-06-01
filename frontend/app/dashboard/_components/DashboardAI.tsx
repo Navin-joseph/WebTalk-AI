@@ -1,15 +1,20 @@
 "use client";
 /**
- * DashboardAI  —  Real-time lip-sync AI assistant (dashboard edition)
+ * DashboardAI  —  Real-time talking-face AI assistant (dashboard edition)
  *
- * Avatar: real person photo with canvas puppet-warp lip sync.
- *   • The existing /avatar.jpg is displayed on a canvas.
- *   • During TTS playback, the Web Audio API analyses frequency bands.
- *   • Per-viseme weights (aa / ih / ou / ee / oh) drive a jaw-drop warp:
- *     the lower-face pixels from the photo actually shift down, creating
- *     a realistic talking effect without any 3rd-party API.
- *   • FaceDetector (Chrome/Edge) auto-locates the mouth for perfect split.
- *   • Idle animations (breathing, head sway, speaking bob) run always.
+ * Avatar pipeline (auto-selected):
+ *
+ *   PRIMARY   → Simli.ai WebRTC  (set NEXT_PUBLIC_SIMLI_API_KEY + _FACE_ID)
+ *               Real-time video stream of a realistic human face speaking
+ *               in sync with TTS audio.  Free tier: 100 min/month.
+ *
+ *   FALLBACK  → Photo puppet-warp  (always available, no API key needed)
+ *               Canvas splits the real avatar.jpg at the detected mouth
+ *               line and shifts the lower-face pixels during speech.
+ *
+ * Audio always plays locally for clean sound + waveform bars.
+ * When Simli is active, the same audio is also converted to PCM-16 and
+ * sent to Simli so the video lips stay in sync.
  */
 
 import { useState, useEffect, useRef, useCallback } from "react";
@@ -18,22 +23,23 @@ import {
   Mic, MicOff, X, Send, Volume2, VolumeX, RotateCcw, MessageSquare,
 } from "lucide-react";
 import { useAudioLipSync } from "@/hooks/useAudioLipSync";
+import { blobToPCM16 }    from "@/hooks/useBlobToPCM16";
 import { PhotoLipSyncAvatar, type PhotoLipSyncHandle } from "./PhotoLipSyncAvatar";
+import { SimliAvatar,         type SimliAvatarHandle }  from "./SimliAvatar";
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
-const API_URL    = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
+const API_URL    = process.env.NEXT_PUBLIC_API_URL          ?? "http://localhost:8000";
 const AVATAR_URL = "/avatar.jpg";
+const SIMLI_KEY  = process.env.NEXT_PUBLIC_SIMLI_API_KEY    ?? "";
+const SIMLI_FACE = process.env.NEXT_PUBLIC_SIMLI_FACE_ID    ?? "";
+const USE_SIMLI  = !!(SIMLI_KEY && SIMLI_FACE);
+
 const NUM_WAVE_BARS = 12;
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-interface Message {
-  role: "user" | "assistant";
-  content: string;
-  streaming?: boolean;
-}
-
+interface Message { role: "user" | "assistant"; content: string; streaming?: boolean; }
 type AvatarState = "idle" | "thinking" | "listening" | "speaking";
 
 // ── Component ─────────────────────────────────────────────────────────────────
@@ -48,6 +54,8 @@ export default function DashboardAI() {
   const [avatarState, setAvatarState] = useState<AvatarState>("idle");
   const [token, setToken]             = useState("");
   const [ttsEnabled, setTtsEnabled]   = useState(true);
+  /** true = Simli WebRTC connected; false = puppet-warp fallback active */
+  const [simliReady, setSimliReady]   = useState(false);
 
   const sessionId      = useRef(`dash_${Date.now()}_${Math.random().toString(36).slice(2)}`);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -60,12 +68,14 @@ export default function DashboardAI() {
   const tokenRef      = useRef(token);
   const ttsEnabledRef = useRef(ttsEnabled);
   const streamingRef  = useRef(false);
+  const simliReadyRef = useRef(false);
 
-  useEffect(() => { tokenRef.current = token; }, [token]);
+  useEffect(() => { tokenRef.current    = token;      }, [token]);
   useEffect(() => { ttsEnabledRef.current = ttsEnabled; }, [ttsEnabled]);
-  useEffect(() => { streamingRef.current = streaming; }, [streaming]);
+  useEffect(() => { streamingRef.current  = streaming;  }, [streaming]);
+  useEffect(() => { simliReadyRef.current = simliReady; }, [simliReady]);
 
-  // TTS pipeline refs
+  // TTS refs
   const audioRef      = useRef<HTMLAudioElement | null>(null);
   const audioUrlRef   = useRef<string | null>(null);
   const ttsAbortRef   = useRef(false);
@@ -76,10 +86,11 @@ export default function DashboardAI() {
   // Waveform bars
   const waveBarRefs = useRef<(HTMLSpanElement | null)[]>(Array(NUM_WAVE_BARS).fill(null));
 
-  // Puppet-warp avatar handle
-  const avatarRef = useRef<PhotoLipSyncHandle>(null);
+  // Avatar handles
+  const puppetRef = useRef<PhotoLipSyncHandle>(null);
+  const simliRef  = useRef<SimliAvatarHandle>(null);
 
-  // Audio lip-sync hook
+  // Audio lip-sync hook (drives puppet-warp OR waveform bars when Simli active)
   const { start: startLipSyncAudio, stop: stopLipSyncAudio } = useAudioLipSync();
 
   // ── Auth ──────────────────────────────────────────────────────────────────
@@ -101,29 +112,30 @@ export default function DashboardAI() {
     }
   }, [open, messages]);
 
-  // ── Stop lip sync ─────────────────────────────────────────────────────────
+  // ── Lip-sync (drives puppet-warp when Simli is not active) ────────────────
   const stopLipSync = useCallback(() => {
     stopLipSyncAudio();
-    avatarRef.current?.reset();
+    puppetRef.current?.reset();
     waveBarRefs.current.forEach(b => { if (b) b.style.height = "3px"; });
   }, [stopLipSyncAudio]);
 
-  // ── Start lip sync ────────────────────────────────────────────────────────
   const startLipSync = useCallback((audioEl: HTMLAudioElement) => {
     stopLipSync();
     startLipSyncAudio(audioEl, (frame) => {
-      // Update waveform bars
       frame.bars.forEach((h, i) => {
         const bar = waveBarRefs.current[i];
         if (bar) bar.style.height = h + "px";
       });
-      // Drive puppet warp
-      avatarRef.current?.updateViseme(frame.weights, frame.amplitude);
+      // Drive puppet-warp only when Simli is not active
+      if (!simliReadyRef.current) {
+        puppetRef.current?.updateViseme(frame.weights, frame.amplitude);
+      }
     });
   }, [stopLipSync, startLipSyncAudio]);
 
   // ── TTS helpers ───────────────────────────────────────────────────────────
-  const fetchAudioUrl = useCallback(async (text: string): Promise<string | null> => {
+  /** Fetch TTS audio, returning both a playable blob URL and the raw blob */
+  const fetchAudioBlob = useCallback(async (text: string): Promise<{ url: string; blob: Blob } | null> => {
     const tok = tokenRef.current;
     if (!text.trim() || !tok || ttsAbortRef.current) return null;
     try {
@@ -133,7 +145,8 @@ export default function DashboardAI() {
         body:    JSON.stringify({ text }),
       });
       if (!r.ok || ttsAbortRef.current) return null;
-      return URL.createObjectURL(await r.blob());
+      const blob = await r.blob();
+      return { url: URL.createObjectURL(blob), blob };
     } catch { return null; }
   }, []);
 
@@ -153,16 +166,24 @@ export default function DashboardAI() {
   const drainTTS = useCallback(async () => {
     if (ttsRunRef.current) return;
     ttsRunRef.current = true;
-    let prefetch: Promise<string | null> | null = null;
+    let prefetch: Promise<{ url: string; blob: Blob } | null> | null = null;
 
     while (ttsQRef.current.length > 0 && !ttsAbortRef.current) {
       const text = ttsQRef.current.shift()!;
-      const url  = await (prefetch || fetchAudioUrl(text));
+      const res  = await (prefetch || fetchAudioBlob(text));
       prefetch   = null;
-      if (!url || ttsAbortRef.current) continue;
+      if (!res || ttsAbortRef.current) continue;
 
+      // Pre-fetch next sentence while current plays
       if (ttsQRef.current.length > 0 && !ttsAbortRef.current)
-        prefetch = fetchAudioUrl(ttsQRef.current[0]);
+        prefetch = fetchAudioBlob(ttsQRef.current[0]);
+
+      const { url, blob } = res;
+
+      // Start converting to PCM-16 for Simli immediately (async, ~50-150 ms)
+      const pcm16Promise: Promise<Uint8Array | null> = simliReadyRef.current
+        ? blobToPCM16(blob).catch(() => null)
+        : Promise.resolve(null);
 
       setSpeaking(true);
       setAvatarState("speaking");
@@ -170,25 +191,38 @@ export default function DashboardAI() {
       audioUrlRef.current = url;
 
       await new Promise<void>(resolve => {
-        audioRef.current!.oncanplay = () => startLipSync(audioRef.current!);
-        audioRef.current!.onended   = () => {
+        audioRef.current!.oncanplay = () => {
+          // Always start local lip-sync analysis (waveform bars + puppet fallback)
+          startLipSync(audioRef.current!);
+        };
+
+        audioRef.current!.play()
+          .then(async () => {
+            // Send audio to Simli in sync with local playback start
+            const pcm16 = await pcm16Promise;
+            if (pcm16 && simliReadyRef.current && !ttsAbortRef.current) {
+              simliRef.current?.sendAudio(pcm16);
+            }
+          })
+          .catch(() => {/* autoplay blocked */});
+
+        audioRef.current!.onended = () => {
           stopLipSync();
           URL.revokeObjectURL(url);
           audioRef.current = null; audioUrlRef.current = null;
           resolve();
         };
         audioRef.current!.onerror = () => { stopLipSync(); resolve(); };
-        audioRef.current!.play().catch(resolve);
       });
     }
 
-    if (prefetch) prefetch.then(u => u && URL.revokeObjectURL(u)).catch(() => {});
+    if (prefetch) prefetch.then(r => r && URL.revokeObjectURL(r.url)).catch(() => {});
     ttsRunRef.current = false;
     if (ttsQRef.current.length === 0) {
       setSpeaking(false);
       setAvatarState(streamingRef.current ? "thinking" : "idle");
     }
-  }, [fetchAudioUrl, startLipSync, stopLipSync]);
+  }, [fetchAudioBlob, startLipSync, stopLipSync]);
 
   const enqueueTTS = useCallback((text: string) => {
     if (!ttsEnabledRef.current || !text.trim()) return;
@@ -200,7 +234,6 @@ export default function DashboardAI() {
   // ── Chat ──────────────────────────────────────────────────────────────────
   const sendMessage = useCallback(async (text: string) => {
     if (!text.trim() || !token) return;
-
     abortRef.current?.abort();
     abortRef.current  = new AbortController();
     stopTTS();
@@ -230,7 +263,7 @@ export default function DashboardAI() {
     setAvatarState("thinking");
 
     let fullAnswer = "";
-    const history = messages.map(m => ({ role: m.role, content: m.content }));
+    const history  = messages.map(m => ({ role: m.role, content: m.content }));
 
     try {
       const res = await fetch(`${API_URL}/api/v1/conversations/assistant/stream`, {
@@ -313,17 +346,13 @@ export default function DashboardAI() {
       return;
     }
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const w = window as any;
+    const w  = window as any;
     const SR = w.SpeechRecognition ?? w.webkitSpeechRecognition;
     if (!SR) { alert("Speech recognition requires Chrome or Edge."); return; }
-
     setListening(true);
     setAvatarState("listening");
-
     const recognition = new SR();
-    recognition.continuous     = false;
-    recognition.interimResults = false;
-    recognition.lang           = "en-US";
+    recognition.continuous = false; recognition.interimResults = false; recognition.lang = "en-US";
     recognition.onstart  = () => { setListening(true);  setAvatarState("listening"); };
     recognition.onend    = () => { setListening(false); setAvatarState(streamingRef.current ? "thinking" : "idle"); };
     recognition.onerror  = () => { setListening(false); setAvatarState("idle"); };
@@ -344,10 +373,10 @@ export default function DashboardAI() {
     setAvatarState("idle");
   }
 
-  const statusLabel = speaking   ? "Speaking…"
-    : listening                  ? "Listening…"
-    : streaming                  ? "Thinking…"
-    :                              "Ask about your AI agent";
+  const statusLabel = speaking  ? "Speaking…"
+    : listening                 ? "Listening…"
+    : streaming                 ? "Thinking…"
+    :                             "Ask about your AI agent";
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
@@ -361,16 +390,41 @@ export default function DashboardAI() {
           {/* ── Avatar header ── */}
           <div className="relative flex-shrink-0 overflow-hidden" style={{ height: 230, background: "#111827" }}>
 
-            {/* Real-person photo with puppet-warp lip sync */}
-            <PhotoLipSyncAvatar
-              ref={avatarRef}
-              photoUrl={AVATAR_URL}
-              width={380}
-              height={230}
-              avatarState={avatarState}
-              className="absolute inset-0"
-              style={{ zIndex: 1 }}
-            />
+            {/* ── Simli real-time video (primary — requires API key) ── */}
+            {USE_SIMLI && (
+              <SimliAvatar
+                ref={simliRef}
+                apiKey={SIMLI_KEY}
+                faceId={SIMLI_FACE}
+                onReady={() => setSimliReady(true)}
+                onError={() => setSimliReady(false)}
+                className="absolute inset-0"
+                style={{ zIndex: 2 }}
+                fallback={
+                  /* Show puppet-warp while Simli is connecting */
+                  <PhotoLipSyncAvatar
+                    ref={puppetRef}
+                    photoUrl={AVATAR_URL}
+                    width={380} height={230}
+                    avatarState={avatarState}
+                    className="absolute inset-0"
+                    style={{ zIndex: 1 }}
+                  />
+                }
+              />
+            )}
+
+            {/* ── Photo puppet-warp (fallback when Simli not configured) ── */}
+            {!USE_SIMLI && (
+              <PhotoLipSyncAvatar
+                ref={puppetRef}
+                photoUrl={AVATAR_URL}
+                width={380} height={230}
+                avatarState={avatarState}
+                className="absolute inset-0"
+                style={{ zIndex: 1 }}
+              />
+            )}
 
             {/* Eye blink overlays */}
             <div className="absolute pointer-events-none" style={{ width:"22%",height:"11%",left:"24%",top:"28%",borderRadius:"0 0 55% 55%/0 0 80% 80%",background:"linear-gradient(to bottom,rgba(18,12,8,0.02) 0%,rgba(18,12,8,0.9) 55%,rgba(18,12,8,0.88) 100%)",transform:"scaleY(0)",transformOrigin:"top center",zIndex:5,animation:"dash-blink 4.5s ease-in-out infinite" }} />
@@ -390,7 +444,9 @@ export default function DashboardAI() {
               style={{ background:"linear-gradient(to bottom,rgba(0,0,0,.65),transparent)", zIndex:11 }}>
               <div>
                 <p className="text-sm font-bold text-white leading-tight" style={{ textShadow:"0 1px 4px rgba(0,0,0,.5)" }}>Dashboard Assistant</p>
-                <p className="text-[10.5px] text-white/75">AI Assistant · Live lip-sync</p>
+                <p className="text-[10.5px] text-white/75">
+                  {simliReady ? "🟢 Live avatar · Simli.ai" : "AI Assistant · Live lip-sync"}
+                </p>
               </div>
               <div className="flex items-center gap-1">
                 {speaking && (
@@ -407,7 +463,7 @@ export default function DashboardAI() {
                   {ttsEnabled ? <Volume2 size={13} /> : <VolumeX size={13} />}
                 </button>
                 {messages.length > 0 && (
-                  <button onClick={clearChat} title="Clear chat"
+                  <button onClick={clearChat} title="Clear"
                     className="w-7 h-7 rounded-lg flex items-center justify-center text-white/85 hover:bg-black/40 transition"
                     style={{ background:"rgba(0,0,0,.3)", backdropFilter:"blur(4px)" }}>
                     <RotateCcw size={12} />
@@ -421,7 +477,7 @@ export default function DashboardAI() {
               </div>
             </div>
 
-            {/* Bottom bar — status pill + waveform + mic */}
+            {/* Bottom bar */}
             <div className="absolute bottom-0 left-0 right-0 flex items-end gap-2 px-3 pb-2.5 pt-8"
               style={{ background:"linear-gradient(to top,rgba(0,0,0,.65),transparent)", zIndex:11 }}>
               <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full flex-shrink-0"
@@ -502,11 +558,7 @@ export default function DashboardAI() {
               <button type="button" onClick={startVoice}
                 title={listening ? "Stop listening" : "Voice input"}
                 className="p-1.5 rounded-xl flex-shrink-0 transition-all"
-                style={{
-                  background: listening ? "#fee2e2" : "#f1f5f9",
-                  color:      listening ? "#ef4444" : "#94a3b8",
-                  animation:  listening ? "dash-dot-pulse 1.2s ease-in-out infinite" : "none",
-                }}>
+                style={{ background: listening ? "#fee2e2" : "#f1f5f9", color: listening ? "#ef4444" : "#94a3b8", animation: listening ? "dash-dot-pulse 1.2s ease-in-out infinite" : "none" }}>
                 {listening ? <MicOff size={15} /> : <Mic size={15} />}
               </button>
               {streaming && !input.trim() ? (
@@ -530,8 +582,7 @@ export default function DashboardAI() {
               ) : (
                 <button type="submit" disabled={!input.trim()}
                   className="p-1.5 rounded-xl flex-shrink-0 text-white disabled:opacity-40 hover:opacity-90 transition shadow-sm"
-                  style={{ background:"linear-gradient(135deg,#7c3aed,#a855f7)" }}
-                  title="Send">
+                  style={{ background:"linear-gradient(135deg,#7c3aed,#a855f7)" }} title="Send">
                   <Send size={15} />
                 </button>
               )}
@@ -547,10 +598,7 @@ export default function DashboardAI() {
       <button
         onClick={() => setOpen(v => !v)}
         className="pointer-events-auto w-14 h-14 rounded-2xl shadow-xl flex items-center justify-center transition-all duration-200 hover:scale-105 active:scale-95"
-        style={{
-          background: open ? "#334155" : "linear-gradient(135deg,#7c3aed,#a855f7)",
-          boxShadow:  open ? "0 10px 25px rgba(0,0,0,.2)" : "0 10px 30px rgba(124,58,237,.4)",
-        }}
+        style={{ background: open ? "#334155" : "linear-gradient(135deg,#7c3aed,#a855f7)", boxShadow: open ? "0 10px 25px rgba(0,0,0,.2)" : "0 10px 30px rgba(124,58,237,.4)" }}
         title="Dashboard AI Assistant"
       >
         {open ? <X size={20} className="text-white" /> : (
@@ -564,8 +612,8 @@ export default function DashboardAI() {
       </button>
 
       <style>{`
-        @keyframes dash-dot-pulse  { 0%,100%{transform:scale(1)} 50%{transform:scale(1.5)} }
-        @keyframes dash-blink      { 0%,93%,100%{transform:scaleY(0)} 95.5%,96.5%{transform:scaleY(1)} 97%{transform:scaleY(0.08)} 98.5%{transform:scaleY(0.92)} }
+        @keyframes dash-dot-pulse { 0%,100%{transform:scale(1)} 50%{transform:scale(1.5)} }
+        @keyframes dash-blink     { 0%,93%,100%{transform:scaleY(0)} 95.5%,96.5%{transform:scaleY(1)} 97%{transform:scaleY(0.08)} 98.5%{transform:scaleY(0.92)} }
       `}</style>
     </div>
   );
