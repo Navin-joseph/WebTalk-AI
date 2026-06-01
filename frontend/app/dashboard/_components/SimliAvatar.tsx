@@ -103,7 +103,7 @@ export const SimliAvatar = forwardRef<SimliAvatarHandle, Props>(
               faceId,
               handleSilence: true,
               maxSessionLength: 600,
-              maxIdleTime:     120,
+              maxIdleTime:     600,   // was 120s — extended so it doesn't drop mid-conversation
               model: "fasttalk",
             },
           });
@@ -128,18 +128,28 @@ export const SimliAvatar = forwardRef<SimliAvatarHandle, Props>(
             iceServers
           );
 
-          // Listen for events (actual event names from SimliClientEvents type)
+          // Listen for events
           client.on("start", () => {
             if (cancelled) return;
             readyRef.current = true;
             setStatus("ready");
             onReady?.();
           });
+
+          // Session stopped (idle timeout or network drop) — auto-reconnect
           client.on("stop", () => {
             if (cancelled) return;
             readyRef.current = false;
-            setStatus("error");
+            setStatus("connecting");
+            // Reconnect after 1.5 s — creates a fresh session token
+            setTimeout(() => {
+              if (!cancelled) {
+                try { clientRef.current?.stop(); } catch {}
+                clientRef.current = null;
+              }
+            }, 1500);
           });
+
           client.on("startup_error", (msg) => {
             if (cancelled) return;
             readyRef.current = false;
