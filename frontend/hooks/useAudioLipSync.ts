@@ -88,7 +88,7 @@ export function useAudioLipSync() {
       const ctx      = audioCtxRef.current;
       const analyser = ctx.createAnalyser();
       analyser.fftSize               = 512;   // 256 bins
-      analyser.smoothingTimeConstant = 0.65;  // mild temporal smoothing
+      analyser.smoothingTimeConstant = 0.40;  // reduced from 0.65 → faster response
       analyserRef.current            = analyser;
 
       const src = ctx.createMediaElementSource(audioEl);
@@ -122,10 +122,10 @@ export function useAudioLipSync() {
         let sumSq   = 0;
         for (let i = lo80; i <= hi4k; i++) sumSq += data[i] * data[i];
         const rms   = Math.sqrt(sumSq / Math.max(1, hi4k - lo80 + 1)) / 255;
-        // Fast attack, slow release — keeps mouth from snapping shut
-        const tgt   = rms > smoothAmpRef.current ? rms : smoothAmpRef.current * 0.84;
-        smoothAmpRef.current += (tgt - smoothAmpRef.current) * 0.28;
-        const amp   = Math.min(1, smoothAmpRef.current * 3.8);
+        // Fast attack (0.50), slow release (0.88) — instant response, no snap
+        const tgt   = rms > smoothAmpRef.current ? rms : smoothAmpRef.current * 0.88;
+        smoothAmpRef.current += (tgt - smoothAmpRef.current) * 0.50;
+        const amp   = Math.min(1, smoothAmpRef.current * 4.2);
         amplitudeRef.current = amp;
 
         // ── Waveform bars (12 visual bars) ────────────────────────────

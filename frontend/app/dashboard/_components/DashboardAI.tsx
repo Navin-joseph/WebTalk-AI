@@ -134,21 +134,105 @@ export default function DashboardAI() {
   }, [stopLipSync, startLipSyncAudio]);
 
   // ── TTS helpers ───────────────────────────────────────────────────────────
-  /** Fetch TTS audio, returning both a playable blob URL and the raw blob */
-  const fetchAudioBlob = useCallback(async (text: string): Promise<{ url: string; blob: Blob } | null> => {
+  /**
+   * Create a streaming audio element via MediaSource Extensions.
+   * First audio bytes arrive from /tts/stream in ~100 ms (vs ~500 ms for /tts).
+   * Falls back to a full blob fetch if MSE is unsupported (Safari < 15.4).
+   * When Simli is active we use the blob endpoint so we have the full PCM-16.
+   */
+  const createAudio = useCallback(async (
+    text: string
+  ): Promise<{ audio: HTMLAudioElement; getBlob: () => Promise<Blob | null> } | null> => {
     const tok = tokenRef.current;
     if (!text.trim() || !tok || ttsAbortRef.current) return null;
+
+    // ── Simli path: need full blob for PCM-16 conversion ─────────────────
+    if (simliReadyRef.current) {
+      try {
+        const r = await fetch(`${API_URL}/api/v1/conversations/tts`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${tok}` },
+          body: JSON.stringify({ text }),
+        });
+        if (!r.ok || ttsAbortRef.current) return null;
+        const blob = await r.blob();
+        const url  = URL.createObjectURL(blob);
+        audioUrlRef.current = url;
+        return { audio: new Audio(url), getBlob: async () => blob };
+      } catch { return null; }
+    }
+
+    // ── Streaming path via MediaSource (puppet-warp / no Simli) ──────────
+    const supportsMS = typeof window !== "undefined"
+      && "MediaSource" in window
+      && MediaSource.isTypeSupported("audio/mpeg");
+
+    if (supportsMS) {
+      try {
+        const r = await fetch(`${API_URL}/api/v1/conversations/tts/stream`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${tok}` },
+          body: JSON.stringify({ text }),
+        });
+        if (!r.ok || !r.body || ttsAbortRef.current) throw new Error("stream failed");
+
+        const ms     = new MediaSource();
+        const msUrl  = URL.createObjectURL(ms);
+        const audio  = new Audio(msUrl);
+        audio.preload = "auto";
+        audioUrlRef.current = msUrl;
+
+        // Pipe stream → SourceBuffer asynchronously (fire & forget)
+        ms.addEventListener("sourceopen", async () => {
+          let sb: SourceBuffer;
+          try { sb = ms.addSourceBuffer("audio/mpeg"); }
+          catch { URL.revokeObjectURL(msUrl); return; }
+
+          const queue: ArrayBuffer[] = [];
+          let busy = false, done = false;
+
+          const flush = () => {
+            if (busy || !queue.length) {
+              if (!busy && done && ms.readyState === "open") {
+                try { ms.endOfStream(); } catch { /* ignore */ }
+              }
+              return;
+            }
+            busy = true;
+            try { sb.appendBuffer(queue.shift()!); }
+            catch { busy = false; }
+          };
+
+          sb.addEventListener("updateend", () => { busy = false; flush(); });
+
+          const reader = r.body!.getReader();
+          for (;;) {
+            const { done: d, value } = await reader.read();
+            if (d) { done = true; flush(); break; }
+            if (ttsAbortRef.current) { reader.cancel(); break; }
+            queue.push(value.buffer as ArrayBuffer);
+            flush();
+          }
+        }, { once: true });
+
+        return { audio, getBlob: async () => null };
+      } catch { /* fall through to blob */ }
+    }
+
+    // ── Blob fallback (Safari, or if streaming fetch failed) ─────────────
     try {
       const r = await fetch(`${API_URL}/api/v1/conversations/tts`, {
-        method:  "POST",
+        method: "POST",
         headers: { "Content-Type": "application/json", Authorization: `Bearer ${tok}` },
-        body:    JSON.stringify({ text }),
+        body: JSON.stringify({ text }),
       });
       if (!r.ok || ttsAbortRef.current) return null;
       const blob = await r.blob();
-      return { url: URL.createObjectURL(blob), blob };
+      const url  = URL.createObjectURL(blob);
+      audioUrlRef.current = url;
+      return { audio: new Audio(url), getBlob: async () => blob };
     } catch { return null; }
-  }, []);
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   const stopTTS = useCallback(() => {
     ttsAbortRef.current   = true;
@@ -156,7 +240,7 @@ export default function DashboardAI() {
     ttsRunRef.current     = false;
     ttsPendingRef.current = "";
     stopLipSync();
-    if (audioRef.current)    { audioRef.current.pause(); audioRef.current = null; }
+    if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; }
     if (audioUrlRef.current) { URL.revokeObjectURL(audioUrlRef.current); audioUrlRef.current = null; }
     setSpeaking(false);
     setAvatarState(streamingRef.current ? "thinking" : "idle");
@@ -166,63 +250,57 @@ export default function DashboardAI() {
   const drainTTS = useCallback(async () => {
     if (ttsRunRef.current) return;
     ttsRunRef.current = true;
-    let prefetch: Promise<{ url: string; blob: Blob } | null> | null = null;
+    let prefetch: ReturnType<typeof createAudio> | null = null;
 
     while (ttsQRef.current.length > 0 && !ttsAbortRef.current) {
-      const text = ttsQRef.current.shift()!;
-      const res  = await (prefetch || fetchAudioBlob(text));
-      prefetch   = null;
-      if (!res || ttsAbortRef.current) continue;
+      const text   = ttsQRef.current.shift()!;
+      const result = await (prefetch || createAudio(text));
+      prefetch     = null;
+      if (!result || ttsAbortRef.current) continue;
 
-      // Pre-fetch next sentence while current plays
+      // Start pre-fetching the next sentence immediately
       if (ttsQRef.current.length > 0 && !ttsAbortRef.current)
-        prefetch = fetchAudioBlob(ttsQRef.current[0]);
+        prefetch = createAudio(ttsQRef.current[0]);
 
-      const { url, blob } = res;
+      const { audio, getBlob } = result;
 
-      // Start converting to PCM-16 for Simli immediately (async, ~50-150 ms)
+      // If Simli is active, convert to PCM-16 concurrently
       const pcm16Promise: Promise<Uint8Array | null> = simliReadyRef.current
-        ? blobToPCM16(blob).catch(() => null)
+        ? getBlob().then(b => b ? blobToPCM16(b) : null).catch(() => null)
         : Promise.resolve(null);
 
       setSpeaking(true);
       setAvatarState("speaking");
-      audioRef.current    = new Audio(url);
-      audioUrlRef.current = url;
+      audioRef.current = audio;
 
       await new Promise<void>(resolve => {
-        audioRef.current!.oncanplay = () => {
-          // Always start local lip-sync analysis (waveform bars + puppet fallback)
-          startLipSync(audioRef.current!);
-        };
+        audio.oncanplay = () => startLipSync(audio);
 
-        audioRef.current!.play()
+        audio.play()
           .then(async () => {
-            // Send audio to Simli in sync with local playback start
             const pcm16 = await pcm16Promise;
-            if (pcm16 && simliReadyRef.current && !ttsAbortRef.current) {
+            if (pcm16 && simliReadyRef.current && !ttsAbortRef.current)
               simliRef.current?.sendAudio(pcm16);
-            }
           })
-          .catch(() => {/* autoplay blocked */});
+          .catch(() => { /* autoplay policy */ });
 
-        audioRef.current!.onended = () => {
+        audio.onended = () => {
           stopLipSync();
-          URL.revokeObjectURL(url);
-          audioRef.current = null; audioUrlRef.current = null;
+          if (audioUrlRef.current) { URL.revokeObjectURL(audioUrlRef.current); audioUrlRef.current = null; }
+          audioRef.current = null;
           resolve();
         };
-        audioRef.current!.onerror = () => { stopLipSync(); resolve(); };
+        audio.onerror = () => { stopLipSync(); resolve(); };
       });
     }
 
-    if (prefetch) prefetch.then(r => r && URL.revokeObjectURL(r.url)).catch(() => {});
+    if (prefetch) prefetch.then(() => {}).catch(() => {});
     ttsRunRef.current = false;
     if (ttsQRef.current.length === 0) {
       setSpeaking(false);
       setAvatarState(streamingRef.current ? "thinking" : "idle");
     }
-  }, [fetchAudioBlob, startLipSync, stopLipSync]);
+  }, [createAudio, startLipSync, stopLipSync]);
 
   const enqueueTTS = useCallback((text: string) => {
     if (!ttsEnabledRef.current || !text.trim()) return;
@@ -299,14 +377,22 @@ export default function DashboardAI() {
                 next[next.length - 1] = { role: "assistant", content: fullAnswer, streaming: true };
                 return next;
               });
+              // ── Flush text aggressively for low latency ──────────────
               let m: RegExpMatchArray | null;
-              while ((m = /^([\s\S]{6,}?[.!?])\s+/.exec(ttsPendingRef.current)) !== null) {
+              // 1. Flush at any sentence-ending punctuation (no min length)
+              while ((m = /^([\s\S]+?[.!?])\s/.exec(ttsPendingRef.current)) !== null) {
                 enqueueTTS(m[1]);
                 ttsPendingRef.current = ttsPendingRef.current.slice(m[0].length);
               }
-              if (ttsPendingRef.current.length > 50) {
-                const cut = ttsPendingRef.current.lastIndexOf(" ", 42);
-                if (cut > 10) { enqueueTTS(ttsPendingRef.current.slice(0, cut)); ttsPendingRef.current = ttsPendingRef.current.slice(cut + 1); }
+              // 2. Flush at comma / semicolon / colon after 20+ chars
+              while ((m = /^([\s\S]{20,}?[,;:])\s/.exec(ttsPendingRef.current)) !== null) {
+                enqueueTTS(m[1]);
+                ttsPendingRef.current = ttsPendingRef.current.slice(m[0].length);
+              }
+              // 3. Force-flush at word boundary after 28 chars (was 50)
+              if (ttsPendingRef.current.length > 28) {
+                const cut = ttsPendingRef.current.lastIndexOf(" ", 24);
+                if (cut > 4) { enqueueTTS(ttsPendingRef.current.slice(0, cut)); ttsPendingRef.current = ttsPendingRef.current.slice(cut + 1); }
               }
             } else if (evt.type === "done") {
               fullAnswer = evt.answer || fullAnswer;

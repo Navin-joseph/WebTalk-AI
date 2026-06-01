@@ -675,14 +675,14 @@
         if (bar) bar.style.height = Math.max(3, Math.round((data[Math.floor(2+i*4)]/255)*24)) + "px";
       }
 
-      // Overall amplitude
+      // Overall amplitude — fast attack (0.50), slow release (0.88)
       let sumSq = 0;
       const lo = bIdx(80), hi = bIdx(4000);
       for (let i=lo; i<=hi; i++) sumSq += data[i]*data[i];
       const rms = Math.sqrt(sumSq / Math.max(1, hi-lo+1)) / 255;
-      const tgt = rms > _smoothAmp ? rms : _smoothAmp * 0.84;
-      _smoothAmp += (tgt - _smoothAmp) * 0.28;
-      _smoothAmp  = Math.min(1, _smoothAmp * 3.8);
+      const tgt = rms > _smoothAmp ? rms : _smoothAmp * 0.88;
+      _smoothAmp += (tgt - _smoothAmp) * 0.50;
+      _smoothAmp  = Math.min(1, _smoothAmp * 4.2);
 
       // Viseme targets from frequency bands
       if (_smoothAmp < 0.03) {
@@ -934,15 +934,22 @@
               const last = msgs[msgs.length - 1];
               if (last) { last.content = fullAnswer; last.streaming = true; }
               render();
-              // Flush at sentence boundary
+              // ── Flush text aggressively for low latency ──────────────
               let m;
-              while ((m = /^([\s\S]{4,}?[.!?])\s+/.exec(ttsPendingText)) !== null) {
+              // 1. Sentence-ending punctuation (no min length)
+              while ((m = /^([\s\S]+?[.!?])\s/.exec(ttsPendingText)) !== null) {
                 ttsEnqueue(m[1]);
                 ttsPendingText = ttsPendingText.slice(m[0].length);
               }
-              if (ttsPendingText.length > 38) {
-                const cut = ttsPendingText.lastIndexOf(" ", 30);
-                if (cut > 8) { ttsEnqueue(ttsPendingText.slice(0, cut)); ttsPendingText = ttsPendingText.slice(cut + 1); }
+              // 2. Comma / semicolon / colon after 20+ chars
+              while ((m = /^([\s\S]{20,}?[,;:])\s/.exec(ttsPendingText)) !== null) {
+                ttsEnqueue(m[1]);
+                ttsPendingText = ttsPendingText.slice(m[0].length);
+              }
+              // 3. Force-flush at word boundary after 28 chars (was 38)
+              if (ttsPendingText.length > 28) {
+                const cut = ttsPendingText.lastIndexOf(" ", 24);
+                if (cut > 4) { ttsEnqueue(ttsPendingText.slice(0, cut)); ttsPendingText = ttsPendingText.slice(cut + 1); }
               }
             } else if (evt.type === "sources") {
               sources = evt.sources || [];
@@ -986,19 +993,75 @@
     _ttsDrain();
   }
 
-  async function _fetchAudio(text) {
+  /**
+   * Create an audio element for a TTS chunk.
+   * Uses MediaSource streaming (/tts/stream) for low latency — first audio
+   * arrives in ~100 ms.  Falls back to blob (/tts) on Safari < 15.4.
+   * Returns { audio, url } where url must be revoked when done.
+   */
+  async function _createAudio(text) {
     if (_ttsFetchAbort) _ttsFetchAbort.abort();
     _ttsFetchAbort = new AbortController();
+    const signal  = _ttsFetchAbort.signal;
+    const headers = { "Content-Type": "application/json", "X-API-Key": cfg.apiKey };
+    const body    = JSON.stringify({ text });
+
+    // ── MediaSource streaming path ──────────────────────────────────────────
+    const supportsMS = typeof MediaSource !== "undefined"
+      && MediaSource.isTypeSupported("audio/mpeg");
+
+    if (supportsMS) {
+      try {
+        const res = await fetch(`${cfg.apiUrl}/api/v1/widget/tts/stream`,
+          { method: "POST", headers, body, signal });
+        if (!res.ok || !res.body || !ttsOn) throw new Error("stream failed");
+
+        const ms    = new MediaSource();
+        const msUrl = URL.createObjectURL(ms);
+        const audio = new Audio(msUrl);
+        audio.preload = "auto";
+        _ttsFetchAbort = null;
+
+        ms.addEventListener("sourceopen", async () => {
+          let sb;
+          try { sb = ms.addSourceBuffer("audio/mpeg"); }
+          catch { URL.revokeObjectURL(msUrl); return; }
+
+          const queue = []; let busy = false, done = false;
+          const flush = () => {
+            if (busy || !queue.length) {
+              if (!busy && done && ms.readyState === "open")
+                try { ms.endOfStream(); } catch {}
+              return;
+            }
+            busy = true;
+            try { sb.appendBuffer(queue.shift()); } catch { busy = false; }
+          };
+          sb.addEventListener("updateend", () => { busy = false; flush(); });
+
+          const reader = res.body.getReader();
+          for (;;) {
+            const { done: d, value } = await reader.read();
+            if (d || !ttsOn) { done = true; flush(); break; }
+            queue.push(value); flush();
+          }
+        }, { once: true });
+
+        return { audio, url: msUrl };
+      } catch (e) {
+        if (e.name === "AbortError") return null;
+        // fall through to blob
+      }
+    }
+
+    // ── Blob fallback (Safari / MSE unavailable) ────────────────────────────
     try {
-      const res = await fetch(`${cfg.apiUrl}/api/v1/widget/tts`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", "X-API-Key": cfg.apiKey },
-        body: JSON.stringify({ text }),
-        signal: _ttsFetchAbort.signal,
-      });
+      const res = await fetch(`${cfg.apiUrl}/api/v1/widget/tts`,
+        { method: "POST", headers, body, signal });
       _ttsFetchAbort = null;
       if (!res.ok || !ttsOn) return null;
-      return URL.createObjectURL(await res.blob());
+      const url = URL.createObjectURL(await res.blob());
+      return { audio: new Audio(url), url };
     } catch (e) {
       if (e.name === "AbortError") return null;
       return null;
@@ -1011,14 +1074,16 @@
     let prefetch = null;
 
     while (ttsQueue.length > 0 && ttsOn) {
-      const chunk = ttsQueue.shift();
-      const url   = await (prefetch || _fetchAudio(chunk));
-      prefetch    = null;
-      if (!url || !ttsOn) continue;
+      const chunk  = ttsQueue.shift();
+      const result = await (prefetch || _createAudio(chunk));
+      prefetch     = null;
+      if (!result || !ttsOn) continue;
 
-      if (ttsQueue.length > 0 && ttsOn) prefetch = _fetchAudio(ttsQueue[0]);
+      // Pre-fetch next sentence immediately
+      if (ttsQueue.length > 0 && ttsOn) prefetch = _createAudio(ttsQueue[0]);
 
-      currentAudio = new Audio(url); currentAudioUrl = url;
+      const { audio, url } = result;
+      currentAudio = audio; currentAudioUrl = url;
       speaking = true;
       setStatus("Speaking…");
       setAvatarState("speaking");
@@ -1026,20 +1091,20 @@
 
       await new Promise(resolve => {
         _ttsResolve = resolve;
-        currentAudio.oncanplay = () => startLipSync(currentAudio);
-        currentAudio.onended = () => {
+        audio.oncanplay = () => startLipSync(audio);
+        audio.onended = () => {
           _ttsResolve = null;
           stopLipSync();
           URL.revokeObjectURL(url);
           currentAudio = null; currentAudioUrl = null;
           resolve();
         };
-        currentAudio.onerror = () => { _ttsResolve = null; stopLipSync(); resolve(); };
-        currentAudio.play().catch(() => { _ttsResolve = null; resolve(); });
+        audio.onerror = () => { _ttsResolve = null; stopLipSync(); resolve(); };
+        audio.play().catch(() => { _ttsResolve = null; resolve(); });
       });
     }
 
-    if (prefetch) prefetch.then(u => { if (u) URL.revokeObjectURL(u); });
+    if (prefetch) prefetch.then(r => { if (r) URL.revokeObjectURL(r.url); }).catch(() => {});
 
     ttsRunning = false;
     if (ttsQueue.length === 0) {
@@ -1056,7 +1121,7 @@
     ttsRunning      = false;
     stopLipSync();
     if (_ttsResolve)    { _ttsResolve(); _ttsResolve = null; }
-    if (_ttsFetchAbort) { _ttsFetchAbort.abort(); _ttsFetchAbort = null; }
+    if (_ttsFetchAbort) { try { _ttsFetchAbort.abort(); } catch {} _ttsFetchAbort = null; }
     if (currentAudio)   { currentAudio.pause(); currentAudio = null; }
     if (currentAudioUrl){ URL.revokeObjectURL(currentAudioUrl); currentAudioUrl = null; }
     speaking = false;
