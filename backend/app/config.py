@@ -25,26 +25,30 @@ class Settings(BaseSettings):
     qdrant_url: str = "http://localhost:6333"
     qdrant_api_key: str = ""
 
-    # Groq — see https://console.groq.com/docs/models for current model names.
-    # llama3-70b-8192 was retired; use llama-3.3-70b-versatile (or 70b-8k variant).
+    # Groq — LLM inference (fastest reasoning, best low-latency)
+    # https://console.groq.com/docs/models
     groq_api_key: str
-    groq_model: str = "llama-3.3-70b-versatile"
+    groq_model: str = "llama-3.1-8b-instant"  # fast, accurate, low latency
     groq_embedding_model: str = "nomic-embed-text-v1_5"  # unused (we use fastembed)
 
-    # Deepgram
+    # Deepgram — Speech-to-text (STT)
+    # https://developers.deepgram.com/docs/flux/quickstart
     deepgram_api_key: str
+    deepgram_stt_model: str = "nova-3"  # latest Flux model, best accuracy
 
     # ElevenLabs
     elevenlabs_api_key: str = ""
     elevenlabs_voice_id: str = "21m00Tcm4TlvDq8ikWAM"  # Rachel
 
-    # Cartesia
+    # Cartesia — Text-to-speech (TTS)
+    # https://docs.cartesia.ai/build-with-cartesia/tts-models/latest
     cartesia_api_key: str = ""
     cartesia_voice_id: str = "694f9389-aac1-45b6-b726-9d9369183238"  # Barbershop Man
-    cartesia_model_id: str = "sonic-2"
+    cartesia_model_id: str = "sonic-3.5"  # latest, lowest latency + best quality
 
     # TTS provider: "elevenlabs" | "cartesia"
-    tts_provider: str = "elevenlabs"
+    # Cartesia recommended: 80–150ms first byte (vs ElevenLabs 200–400ms)
+    tts_provider: str = "cartesia"
 
     # CORS
     allowed_origins: list[str] = ["http://localhost:3000"]

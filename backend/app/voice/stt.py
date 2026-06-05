@@ -7,16 +7,17 @@ DEEPGRAM_URL = "https://api.deepgram.com/v1/listen"
 
 
 class DeepgramSTT:
-    """Transcribe audio bytes using Deepgram Nova-2."""
+    """Transcribe audio bytes using Deepgram (Nova-3 / Flux)."""
 
     def __init__(self):
         self.api_key = settings.deepgram_api_key
+        self.model = settings.deepgram_stt_model
         self.headers = {
             "Authorization": f"Token {self.api_key}",
             "Content-Type": "audio/webm",
         }
         self.params = {
-            "model": "nova-2",
+            "model": self.model,
             "smart_format": "true",
             "punctuate": "true",
             "language": "en-US",

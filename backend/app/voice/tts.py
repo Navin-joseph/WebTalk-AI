@@ -82,7 +82,7 @@ class ElevenLabsTTS:
 
 
 class CartesiaTTS:
-    """Convert text to speech using Cartesia's API (sonic-2 model, SSE streaming)."""
+    """Convert text to speech using Cartesia's API (sonic-3.5 model, SSE streaming)."""
 
     def __init__(self, voice_id: str | None = None):
         self.api_key = settings.cartesia_api_key
