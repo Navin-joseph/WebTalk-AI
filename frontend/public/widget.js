@@ -1092,22 +1092,22 @@
               const last = msgs[msgs.length - 1];
               if (last) { last.content = fullAnswer; last.streaming = true; }
               render();
-              // ── Flush text to TTS — larger chunks = longer audio = fewer Simli gaps ─
+              // ── Flush text to TTS ─────────────────────────────────────────
               let m;
               // 1. Sentence-ending punctuation (. ! ?)
               while ((m = /^([\s\S]+?[.!?])\s/.exec(ttsPendingText)) !== null) {
                 ttsEnqueue(m[1]);
                 ttsPendingText = ttsPendingText.slice(m[0].length);
               }
-              // 2. Comma / semicolon / colon after 50+ chars (was 20 — longer chunks)
-              while ((m = /^([\s\S]{50,}?[,;:])\s/.exec(ttsPendingText)) !== null) {
+              // 2. Comma / semicolon / colon after 20+ chars
+              while ((m = /^([\s\S]{20,}?[,;:])\s/.exec(ttsPendingText)) !== null) {
                 ttsEnqueue(m[1]);
                 ttsPendingText = ttsPendingText.slice(m[0].length);
               }
-              // 3. Force-flush at word boundary after 80 chars (was 28 — much longer)
-              if (ttsPendingText.length > 80) {
-                const cut = ttsPendingText.lastIndexOf(" ", 70);
-                if (cut > 10) { ttsEnqueue(ttsPendingText.slice(0, cut)); ttsPendingText = ttsPendingText.slice(cut + 1); }
+              // 3. Force-flush at word boundary after 28 chars
+              if (ttsPendingText.length > 28) {
+                const cut = ttsPendingText.lastIndexOf(" ", 24);
+                if (cut > 4) { ttsEnqueue(ttsPendingText.slice(0, cut)); ttsPendingText = ttsPendingText.slice(cut + 1); }
               }
             } else if (evt.type === "sources") {
               sources = evt.sources || [];
@@ -1229,32 +1229,17 @@
     }
   }
 
-  // ── Simli audio queue — sends PCM-16 to Simli independently of local playback ──
-  // This fills Simli's buffer ahead of time so lips move continuously without gaps.
-  const _simliPcmQueue  = [];
-  let   _simliSendBusy  = false;
-  let   _simliSentSet   = new WeakSet(); // prevent sending same blob twice
+  // Track URLs already sent to Simli (avoid double-sending prefetched chunks)
+  const _simliSentUrls = new Set();
 
-  async function _drainSimliPcm() {
-    if (_simliSendBusy) return;
-    _simliSendBusy = true;
-    while (_simliPcmQueue.length > 0 && _simliReady && _simliClient) {
-      const blob = _simliPcmQueue.shift();
-      try {
-        const pcm16 = await _blobToPCM16(blob);
-        if (pcm16 && _simliClient && _simliReady)
-          _simliClient.sendAudioData(pcm16);
-      } catch {}
-    }
-    _simliSendBusy = false;
-  }
-
-  function _enqueueSimliBlob(blob) {
-    if (!blob || !_simliReady || !_simliClient) return;
-    if (_simliSentSet.has(blob)) return;   // already queued
-    _simliSentSet.add(blob);
-    _simliPcmQueue.push(blob);
-    _drainSimliPcm();
+  /** Convert blob to PCM-16 and send to Simli. Deduped by blob URL. */
+  function _sendToSimli(blob, url) {
+    if (!_simliReady || !blob || !_simliClient) return;
+    if (_simliSentUrls.has(url)) return;
+    _simliSentUrls.add(url);
+    _blobToPCM16(blob)
+      .then(pcm16 => { if (pcm16 && _simliClient && _simliReady) _simliClient.sendAudioData(pcm16); })
+      .catch(() => {});
   }
 
   async function _ttsDrain() {
@@ -1270,14 +1255,14 @@
 
       const { audio, url, blob } = result;
 
-      // ── Send current chunk to Simli immediately (fills Simli's buffer) ──
-      _enqueueSimliBlob(blob);
+      // ── Send current chunk to Simli immediately ──────────────────────
+      _sendToSimli(blob, url);
 
-      // ── Pre-fetch next AND immediately queue its PCM-16 for Simli ──────
-      // This overlaps Simli audio with local playback to eliminate SILENT gaps
+      // ── Prefetch next chunk AND send its PCM-16 to Simli in advance ──
+      // This overlaps so Simli has audio buffered before current chunk ends
       if (ttsQueue.length > 0 && ttsOn) {
         prefetch = _createAudio(ttsQueue[0]);
-        prefetch.then(r => _enqueueSimliBlob(r?.blob)).catch(() => {});
+        prefetch.then(r => { if (r) _sendToSimli(r.blob, r.url); }).catch(() => {});
       }
 
       currentAudio = audio; currentAudioUrl = url;
@@ -1291,13 +1276,16 @@
         audio.oncanplay = () => startLipSync(audio);
         audio.onended = () => {
           _ttsResolve = null;
+          _simliSentUrls.delete(url);  // clean up
           stopLipSync();
           URL.revokeObjectURL(url);
           currentAudio = null; currentAudioUrl = null;
           resolve();
         };
         audio.onerror = () => { _ttsResolve = null; stopLipSync(); resolve(); };
-        audio.play().catch(() => { _ttsResolve = null; resolve(); });
+        audio.play()
+          .then(() => console.log("[WebTalkAI] Audio playing:", text?.slice(0, 30)))
+          .catch(e => { console.warn("[WebTalkAI] audio.play() failed:", e.message); _ttsResolve = null; resolve(); });
       });
     }
 
@@ -1316,8 +1304,7 @@
     ttsQueue        = [];
     ttsPendingText  = "";
     ttsRunning      = false;
-    _simliPcmQueue.splice(0);   // clear Simli audio queue
-    _simliSendBusy  = false;
+    _simliSentUrls.clear();     // clear Simli dedup tracking
     stopLipSync();
     if (_ttsResolve)    { _ttsResolve(); _ttsResolve = null; }
     if (_ttsFetchAbort) { try { _ttsFetchAbort.abort(); } catch {} _ttsFetchAbort = null; }
