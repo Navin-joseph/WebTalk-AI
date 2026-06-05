@@ -9,7 +9,7 @@ interface ApiKey { id: string; name: string; key_prefix: string; created_at: str
 
 /** Build the ready-to-paste embed snippet for a given API key. */
 function buildSnippet(apiKey: string) {
-  return `<script defer src="https://web-talk-ai.vercel.app/widget.js"><\/script>
+  return `<script defer src="https://web-talk-ai.vercel.app/widget.js"><` + `/script>
 <script>
 document.addEventListener("DOMContentLoaded", function () {
   WebTalkAI.init({
@@ -20,7 +20,7 @@ document.addEventListener("DOMContentLoaded", function () {
     ttsAutoPlay: true
   });
 });
-<\/script>`;
+<` + `/script>`;
 }
 
 export default function ApiKeysPage() {
