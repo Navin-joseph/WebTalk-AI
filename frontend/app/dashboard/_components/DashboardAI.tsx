@@ -361,22 +361,22 @@ export default function DashboardAI() {
                 next[next.length - 1] = { role: "assistant", content: fullAnswer, streaming: true };
                 return next;
               });
-              // ── Flush text aggressively for low latency ──────────────
+              // ── Flush text — aggressive for low lip-sync latency ─────────────
               let m: RegExpMatchArray | null;
-              // 1. Flush at any sentence-ending punctuation (no min length)
+              // 1. Sentence-ending punctuation (. ! ?) — always send immediately
               while ((m = /^([\s\S]+?[.!?])\s/.exec(ttsPendingRef.current)) !== null) {
                 enqueueTTS(m[1]);
                 ttsPendingRef.current = ttsPendingRef.current.slice(m[0].length);
               }
-              // 2. Flush at comma / semicolon / colon after 20+ chars
-              while ((m = /^([\s\S]{20,}?[,;:])\s/.exec(ttsPendingRef.current)) !== null) {
+              // 2. Comma / semicolon / colon after 12+ chars (was 20 — faster flush)
+              while ((m = /^([\s\S]{12,}?[,;:])\s/.exec(ttsPendingRef.current)) !== null) {
                 enqueueTTS(m[1]);
                 ttsPendingRef.current = ttsPendingRef.current.slice(m[0].length);
               }
-              // 3. Force-flush at word boundary after 28 chars (was 50)
-              if (ttsPendingRef.current.length > 28) {
-                const cut = ttsPendingRef.current.lastIndexOf(" ", 24);
-                if (cut > 4) { enqueueTTS(ttsPendingRef.current.slice(0, cut)); ttsPendingRef.current = ttsPendingRef.current.slice(cut + 1); }
+              // 3. Force-flush at word boundary after 18 chars (was 28 — much faster)
+              if (ttsPendingRef.current.length > 18) {
+                const cut = ttsPendingRef.current.lastIndexOf(" ", 15);
+                if (cut > 3) { enqueueTTS(ttsPendingRef.current.slice(0, cut)); ttsPendingRef.current = ttsPendingRef.current.slice(cut + 1); }
               }
             } else if (evt.type === "done") {
               fullAnswer = evt.answer || fullAnswer;
@@ -454,11 +454,11 @@ export default function DashboardAI() {
 
       {open && (
         <div
-          className="pointer-events-auto w-[380px] rounded-3xl shadow-2xl border border-white/60 flex flex-col overflow-hidden"
-          style={{ height: 600, background: "rgba(255,255,255,0.97)", backdropFilter: "blur(24px)", WebkitBackdropFilter: "blur(24px)" }}
+          className="pointer-events-auto w-[380px] rounded-3xl shadow-2xl border border-slate-300 flex flex-col overflow-hidden"
+          style={{ height: 600, background: "rgba(255,255,255,0.98)", backdropFilter: "blur(24px)", WebkitBackdropFilter: "blur(24px)" }}
         >
           {/* ── Avatar header ── */}
-          <div className="relative flex-shrink-0 overflow-hidden" style={{ height: 230, background: "#111827" }}>
+          <div className="relative flex-shrink-0 overflow-hidden" style={{ height: 230, background: "#f8fafc" }}>
 
             {/* ── Simli WebRTC video — full-area, no photo fallback ── */}
             <SimliAvatar
@@ -474,16 +474,16 @@ export default function DashboardAI() {
             {/* ── Clean loading screen while WebRTC connects (~3 s) ── */}
             {!simliReady && (
               <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 pointer-events-none"
-                style={{ background: "linear-gradient(160deg,#1e1b4b 0%,#111827 60%,#0f172a 100%)", zIndex: 1 }}>
+                style={{ background: "linear-gradient(160deg,#f0f4f8 0%,#e8eef7 60%,#dfe9f3 100%)", zIndex: 1 }}>
                 {/* Animated ring */}
                 <div className="relative w-14 h-14">
-                  <div className="absolute inset-0 rounded-full border-2 border-violet-500/20" />
-                  <div className="absolute inset-0 rounded-full border-2 border-transparent border-t-violet-400"
+                  <div className="absolute inset-0 rounded-full border-2 border-violet-300" />
+                  <div className="absolute inset-0 rounded-full border-2 border-transparent border-t-violet-600"
                     style={{ animation: "dash-spin 1s linear infinite" }} />
                   <div className="absolute inset-2 rounded-full"
-                    style={{ background: "radial-gradient(circle,rgba(124,58,237,0.15) 0%,transparent 70%)" }} />
+                    style={{ background: "radial-gradient(circle,rgba(124,58,237,0.1) 0%,transparent 70%)" }} />
                 </div>
-                <p className="text-[11px] font-semibold text-white/50 tracking-wide uppercase">Connecting avatar</p>
+                <p className="text-[11px] font-semibold text-slate-500 tracking-wide uppercase">Connecting avatar</p>
               </div>
             )}
 
@@ -498,35 +498,35 @@ export default function DashboardAI() {
 
             {/* Top bar */}
             <div className="absolute top-0 left-0 right-0 flex items-start justify-between px-3 pt-2.5 pb-8"
-              style={{ background:"linear-gradient(to bottom,rgba(0,0,0,.65),transparent)", zIndex:11 }}>
+              style={{ background:"linear-gradient(to bottom,rgba(255,255,255,.7),transparent)", zIndex:11 }}>
               <div>
-                <p className="text-sm font-bold text-white leading-tight" style={{ textShadow:"0 1px 4px rgba(0,0,0,.5)" }}>Dashboard Assistant</p>
-                <p className="text-[10.5px] text-white/75">AI Assistant</p>
+                <p className="text-sm font-bold text-slate-800 leading-tight" style={{ textShadow:"0 1px 2px rgba(255,255,255,.8)" }}>Dashboard Assistant</p>
+                <p className="text-[10.5px] text-slate-600">AI Assistant</p>
               </div>
               <div className="flex items-center gap-1">
                 {speaking && (
                   <button onClick={stopTTS} title="Stop speaking"
-                    className="w-7 h-7 rounded-lg flex items-center justify-center text-white/85 hover:bg-black/40 transition"
-                    style={{ background:"rgba(0,0,0,.3)", backdropFilter:"blur(4px)" }}>
+                    className="w-7 h-7 rounded-lg flex items-center justify-center text-slate-700 hover:bg-white/40 transition"
+                    style={{ background:"rgba(255,255,255,.4)", backdropFilter:"blur(4px)" }}>
                     <VolumeX size={13} />
                   </button>
                 )}
                 <button onClick={() => { setTtsEnabled(v => !v); if (speaking) stopTTS(); }}
                   title={ttsEnabled ? "Mute" : "Unmute"}
-                  className="w-7 h-7 rounded-lg flex items-center justify-center text-white/85 hover:bg-black/40 transition"
-                  style={{ background:"rgba(0,0,0,.3)", backdropFilter:"blur(4px)" }}>
+                  className="w-7 h-7 rounded-lg flex items-center justify-center text-slate-700 hover:bg-white/40 transition"
+                  style={{ background:"rgba(255,255,255,.4)", backdropFilter:"blur(4px)" }}>
                   {ttsEnabled ? <Volume2 size={13} /> : <VolumeX size={13} />}
                 </button>
                 {messages.length > 0 && (
                   <button onClick={clearChat} title="Clear"
-                    className="w-7 h-7 rounded-lg flex items-center justify-center text-white/85 hover:bg-black/40 transition"
-                    style={{ background:"rgba(0,0,0,.3)", backdropFilter:"blur(4px)" }}>
+                    className="w-7 h-7 rounded-lg flex items-center justify-center text-slate-700 hover:bg-white/40 transition"
+                    style={{ background:"rgba(255,255,255,.4)", backdropFilter:"blur(4px)" }}>
                     <RotateCcw size={12} />
                   </button>
                 )}
                 <button onClick={() => setOpen(false)}
-                  className="w-7 h-7 rounded-lg flex items-center justify-center text-white/85 hover:bg-black/40 transition"
-                  style={{ background:"rgba(0,0,0,.3)", backdropFilter:"blur(4px)" }}>
+                  className="w-7 h-7 rounded-lg flex items-center justify-center text-slate-700 hover:bg-white/40 transition"
+                  style={{ background:"rgba(255,255,255,.4)", backdropFilter:"blur(4px)" }}>
                   <X size={13} />
                 </button>
               </div>
@@ -534,30 +534,30 @@ export default function DashboardAI() {
 
             {/* Bottom bar */}
             <div className="absolute bottom-0 left-0 right-0 flex items-end gap-2 px-3 pb-2.5 pt-8"
-              style={{ background:"linear-gradient(to top,rgba(0,0,0,.65),transparent)", zIndex:11 }}>
+              style={{ background:"linear-gradient(to top,rgba(255,255,255,.7),transparent)", zIndex:11 }}>
               <div className="flex items-center gap-1.5 px-2.5 py-1 rounded-full flex-shrink-0"
-                style={{ background:"rgba(0,0,0,.4)", backdropFilter:"blur(4px)" }}>
+                style={{ background:"rgba(255,255,255,.5)", backdropFilter:"blur(4px)" }}>
                 <span className="w-2 h-2 rounded-full flex-shrink-0 transition-all duration-300" style={{
-                  background: avatarState==="thinking"  ? "#60a5fa"
-                            : avatarState==="listening" ? "#34d399"
-                            : avatarState==="speaking"  ? "#e879f9"
-                            : "#64748b",
+                  background: avatarState==="thinking"  ? "#3b82f6"
+                            : avatarState==="listening" ? "#10b981"
+                            : avatarState==="speaking"  ? "#a855f7"
+                            : "#94a3b8",
                   animation: avatarState !== "idle" ? "dash-dot-pulse 0.7s ease-in-out infinite" : "none",
                 }} />
-                <span className="text-[10.5px] font-semibold text-white/90 whitespace-nowrap">{statusLabel}</span>
+                <span className="text-[10.5px] font-semibold text-slate-700 whitespace-nowrap">{statusLabel}</span>
               </div>
               <div className="flex items-end gap-[2.5px] h-6 flex-1 transition-opacity duration-300"
                 style={{ opacity: avatarState==="speaking" || avatarState==="listening" ? 1 : 0 }}>
                 {Array.from({ length: NUM_WAVE_BARS }, (_, i) => (
                   <span key={i} ref={el => { waveBarRefs.current[i] = el; }}
                     className="flex-shrink-0 rounded-sm"
-                    style={{ width:3, height:3, background:"rgba(255,255,255,.85)", transition:"height 0.04s linear" }} />
+                    style={{ width:3, height:3, background:"rgba(168,85,247,.75)", transition:"height 0.04s linear" }} />
                 ))}
               </div>
               <button onClick={startVoice} title={listening ? "Stop" : "Voice input"}
                 className="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 text-white transition"
                 style={{
-                  background:    listening ? "rgba(239,68,68,.5)" : "rgba(255,255,255,.15)",
+                  background:    listening ? "rgba(239,68,68,.6)" : "rgba(168,85,247,.5)",
                   backdropFilter:"blur(4px)",
                   animation:     listening ? "dash-dot-pulse 1.2s ease-in-out infinite" : "none",
                 }}>
@@ -567,16 +567,16 @@ export default function DashboardAI() {
           </div>
 
           {/* Messages */}
-          <div className="flex-1 overflow-y-auto p-4 space-y-3">
+          <div className="flex-1 overflow-y-auto p-4 space-y-3 bg-white">
             {messages.length === 0 && (
               <div className="h-full flex items-center justify-center">
                 <div className="text-center px-4">
-                  <p className="text-sm font-semibold text-slate-700 mb-1">Your AI Agent Assistant</p>
-                  <p className="text-xs text-slate-400 leading-relaxed mb-4">Ask about training status, conversation quality, API setup, or how to improve your agent.</p>
+                  <p className="text-sm font-semibold text-slate-900 mb-1">Your AI Agent Assistant</p>
+                  <p className="text-xs text-slate-500 leading-relaxed mb-4">Ask about training status, conversation quality, API setup, or how to improve your agent.</p>
                   <div className="flex flex-col gap-2">
                     {["How do I train my AI on a new site?","Why isn't my widget responding?","How do I embed the widget?"].map(q => (
                       <button key={q} onClick={() => sendMessage(q)}
-                        className="text-xs text-left px-3 py-2 rounded-xl bg-slate-50 hover:bg-violet-50 hover:text-violet-700 text-slate-500 border border-slate-100 hover:border-violet-200 transition">{q}
+                        className="text-xs text-left px-3 py-2 rounded-xl bg-violet-50 hover:bg-violet-100 hover:text-violet-800 text-slate-700 border border-violet-200 hover:border-violet-300 transition">{q}
                       </button>
                     ))}
                   </div>
@@ -586,7 +586,7 @@ export default function DashboardAI() {
             {messages.map((m, i) => (
               <div key={i} className={`flex ${m.role==="user" ? "justify-end" : "justify-start"}`}>
                 <div
-                  className={`max-w-[86%] px-3.5 py-2.5 rounded-2xl text-sm leading-relaxed ${m.role==="user" ? "text-white rounded-br-sm" : "bg-slate-100 text-slate-700 rounded-bl-sm"}`}
+                  className={`max-w-[86%] px-3.5 py-2.5 rounded-2xl text-sm leading-relaxed ${m.role==="user" ? "text-white rounded-br-sm" : "bg-slate-100 text-slate-900 rounded-bl-sm"}`}
                   style={m.role==="user" ? { background:"linear-gradient(135deg,#7c3aed,#a855f7)" } : {}}
                 >
                   {m.content || (m.streaming && (
@@ -602,18 +602,18 @@ export default function DashboardAI() {
           </div>
 
           {/* Input */}
-          <div className="p-3 border-t border-slate-100 flex-shrink-0">
-            <form onSubmit={handleSubmit} className="flex items-center gap-2 bg-slate-50 rounded-2xl px-3 py-1.5 border border-slate-200 focus-within:border-violet-300 focus-within:ring-2 focus-within:ring-violet-100 transition">
+          <div className="p-3 border-t border-slate-200 flex-shrink-0 bg-white">
+            <form onSubmit={handleSubmit} className="flex items-center gap-2 bg-slate-50 rounded-2xl px-3 py-1.5 border border-slate-300 focus-within:border-violet-400 focus-within:ring-2 focus-within:ring-violet-200 transition">
               <input
                 ref={inputRef} type="text" value={input}
                 onChange={e => setInput(e.target.value)}
                 placeholder={listening ? "Listening…" : streaming && !input ? "Responding… (type to interrupt)" : "Type or speak…"}
-                className="flex-1 bg-transparent text-sm text-slate-700 placeholder:text-slate-400 focus:outline-none py-1 min-w-0"
+                className="flex-1 bg-transparent text-sm text-slate-900 placeholder:text-slate-500 focus:outline-none py-1 min-w-0"
               />
               <button type="button" onClick={startVoice}
                 title={listening ? "Stop listening" : "Voice input"}
                 className="p-1.5 rounded-xl flex-shrink-0 transition-all"
-                style={{ background: listening ? "#fee2e2" : "#f1f5f9", color: listening ? "#ef4444" : "#94a3b8", animation: listening ? "dash-dot-pulse 1.2s ease-in-out infinite" : "none" }}>
+                style={{ background: listening ? "#fee2e2" : "#e8e8f8", color: listening ? "#ef4444" : "#6366f1", animation: listening ? "dash-dot-pulse 1.2s ease-in-out infinite" : "none" }}>
                 {listening ? <MicOff size={15} /> : <Mic size={15} />}
               </button>
               {streaming && !input.trim() ? (

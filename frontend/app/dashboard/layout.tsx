@@ -38,9 +38,9 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
   const initials = user?.email?.[0]?.toUpperCase() ?? "?";
 
   return (
-    <div className="flex h-screen bg-slate-950">
-      <aside className="w-64 bg-slate-900 border-r border-slate-800 flex flex-col flex-shrink-0">
-        <div className="px-6 py-5 border-b border-slate-800">
+    <div className="flex h-screen bg-white">
+      <aside className="w-64 bg-slate-50 border-r border-slate-200 flex flex-col flex-shrink-0">
+        <div className="px-6 py-5 border-b border-slate-200">
           <Link href="/dashboard" className="flex items-center gap-2.5">
             <div className="w-9 h-9 rounded-xl bg-gradient-brand flex items-center justify-center shadow-soft">
               <Sparkles size={16} className="text-white" />
@@ -50,7 +50,7 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         </div>
 
         <nav className="flex-1 px-3 py-4 space-y-1 overflow-y-auto">
-          <p className="px-3 py-2 text-[10px] font-bold tracking-widest uppercase text-slate-500">Workspace</p>
+          <p className="px-3 py-2 text-[10px] font-bold tracking-widest uppercase text-slate-400">Workspace</p>
           {nav.map(({ href, label, icon: Icon, exact }) => {
             const active = exact ? pathname === href : pathname.startsWith(href);
             return (
@@ -59,11 +59,11 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
                 href={href}
                 className={`flex items-center gap-3 px-3 py-2.5 rounded-xl text-sm font-medium transition ${
                   active
-                    ? "bg-slate-800 text-violet-400 shadow-sm"
-                    : "text-slate-400 hover:bg-slate-800/50 hover:text-slate-200"
+                    ? "bg-violet-100 text-violet-700 shadow-sm"
+                    : "text-slate-600 hover:bg-slate-100 hover:text-slate-700"
                 }`}
               >
-                <Icon size={17} className={active ? "text-violet-400" : "text-slate-500"} />
+                <Icon size={17} className={active ? "text-violet-600" : "text-slate-500"} />
                 {label}
                 {active && <span className="ml-auto w-1.5 h-1.5 rounded-full bg-violet-500" />}
               </Link>
@@ -71,18 +71,18 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
           })}
         </nav>
 
-        <div className="p-3 border-t border-slate-800">
-          <div className="flex items-center gap-3 px-2 py-2 rounded-xl hover:bg-slate-800/50 transition cursor-pointer">
+        <div className="p-3 border-t border-slate-200">
+          <div className="flex items-center gap-3 px-2 py-2 rounded-xl hover:bg-slate-100 transition cursor-pointer">
             <div className="w-9 h-9 rounded-full bg-gradient-brand text-white font-semibold flex items-center justify-center text-sm flex-shrink-0">
               {initials}
             </div>
             <div className="flex-1 min-w-0">
-              <div className="text-sm font-medium text-white truncate">{user?.email ?? "Loading…"}</div>
+              <div className="text-sm font-medium text-slate-900 truncate">{user?.email ?? "Loading…"}</div>
               <div className="text-xs text-slate-500">Owner</div>
             </div>
             <button
               onClick={handleLogout}
-              className="p-1.5 rounded-lg text-slate-500 hover:text-red-400 hover:bg-red-950/30 transition"
+              className="p-1.5 rounded-lg text-slate-500 hover:text-red-600 hover:bg-red-50 transition"
               aria-label="Sign out"
               title="Sign out"
             >
@@ -92,8 +92,8 @@ export default function DashboardLayout({ children }: { children: React.ReactNod
         </div>
       </aside>
 
-      <main className="flex-1 overflow-auto bg-slate-950">
-        <div className="fade-in px-10 py-8 max-w-7xl mx-auto text-slate-100">{children}</div>
+      <main className="flex-1 overflow-auto bg-white">
+        <div className="fade-in px-10 py-8 max-w-7xl mx-auto text-slate-900">{children}</div>
       </main>
 
       {/* Floating AI assistant — available on every dashboard page */}

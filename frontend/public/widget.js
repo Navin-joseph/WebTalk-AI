@@ -154,28 +154,28 @@
 .wtai-badge{position:absolute;top:-1px;right:-1px;width:12px;height:12px;border-radius:50%;background:#34d399;border:2px solid #fff}
 
 /* Panel */
-.wtai-panel{position:fixed;${side}:24px;bottom:92px;z-index:2147483647;width:380px;max-width:calc(100vw - 32px);height:580px;max-height:calc(100vh - 120px);background:rgba(15,23,42,.95);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);border-radius:24px;border:1px solid rgba(100,116,139,.4);box-shadow:0 20px 60px rgba(0,0,0,.3),0 4px 16px rgba(0,0,0,.15);display:none;flex-direction:column;overflow:hidden}
+.wtai-panel{position:fixed;${side}:24px;bottom:92px;z-index:2147483647;width:380px;max-width:calc(100vw - 32px);height:580px;max-height:calc(100vh - 120px);background:rgba(255,255,255,.98);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);border-radius:24px;border:1px solid rgba(200,210,220,.5);box-shadow:0 20px 60px rgba(0,0,0,.08),0 4px 16px rgba(0,0,0,.04);display:none;flex-direction:column;overflow:hidden}
 .wtai-panel.open{display:flex;animation:wtai-fadein .3s cubic-bezier(.16,1,.3,1)}
 @keyframes wtai-fadein{from{opacity:0;transform:translateY(12px) scale(.96)}to{opacity:1;transform:translateY(0) scale(1)}}
 
 /* Header */
-.wtai-head{padding:13px 16px;display:flex;align-items:center;gap:10px;border-bottom:1px solid rgba(100,116,139,.2);background:rgba(51,65,85,.3);flex-shrink:0}
+.wtai-head{padding:13px 16px;display:flex;align-items:center;gap:10px;border-bottom:1px solid rgba(200,210,220,.4);background:#f8fafc;flex-shrink:0}
 .wtai-av{width:36px;height:36px;border-radius:10px;flex-shrink:0;background:linear-gradient(135deg,${p},${a});display:flex;align-items:center;justify-content:center;transition:box-shadow .3s}
 .wtai-av svg{width:18px;height:18px;fill:#fff}
 .wtai-av-active{box-shadow:0 0 0 3px ${p}44;animation:wtai-pulse 1.5s ease-in-out infinite}
 @keyframes wtai-pulse{0%,100%{opacity:1;transform:scale(1)}50%{opacity:.85;transform:scale(1.06)}}
 .wtai-hinfo{flex:1;min-width:0}
-.wtai-hname{font-size:13px;font-weight:600;color:#1e293b;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-.wtai-hstatus{font-size:11px;color:#94a3b8;margin-top:1px}
+.wtai-hname{font-size:13px;font-weight:600;color:#1f2937;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.wtai-hstatus{font-size:11px;color:#6b7280;margin-top:1px}
 .wtai-hbtns{display:flex;align-items:center;gap:2px}
-.wtai-hbtn{width:28px;height:28px;border:none;background:none;cursor:pointer;border-radius:8px;display:flex;align-items:center;justify-content:center;color:#94a3b8;transition:background .15s,color .15s;flex-shrink:0}
-.wtai-hbtn:hover{background:rgba(148,163,184,.15);color:#475569}
+.wtai-hbtn{width:28px;height:28px;border:none;background:none;cursor:pointer;border-radius:8px;display:flex;align-items:center;justify-content:center;color:#6b7280;transition:background .15s,color .15s;flex-shrink:0}
+.wtai-hbtn:hover{background:rgba(200,210,220,.2);color:#374151}
 .wtai-hbtn svg{width:15px;height:15px;fill:currentColor}
 
 /* Messages */
-.wtai-msgs{flex:1;overflow-y:auto;padding:14px 14px 10px;display:flex;flex-direction:column;gap:10px}
+.wtai-msgs{flex:1;overflow-y:auto;padding:14px 14px 10px;display:flex;flex-direction:column;gap:10px;background:#fff}
 .wtai-msgs::-webkit-scrollbar{width:4px}
-.wtai-msgs::-webkit-scrollbar-thumb{background:rgba(100,116,139,.5);border-radius:2px}
+.wtai-msgs::-webkit-scrollbar-thumb{background:rgba(200,210,220,.4);border-radius:2px}
 .wtai-mrow{display:flex}
 .wtai-mrow.user{justify-content:flex-end}
 .wtai-mrow.bot{justify-content:flex-start;align-items:flex-end;gap:7px}
@@ -183,38 +183,38 @@
 .wtai-mav svg{width:13px;height:13px;fill:#fff}
 .wtai-bub{max-width:82%;padding:9px 13px;border-radius:18px;font-size:13.5px;line-height:1.55;word-wrap:break-word;white-space:pre-wrap}
 .wtai-mrow.user .wtai-bub{background:linear-gradient(135deg,${p},${a});color:#fff;border-bottom-right-radius:4px;box-shadow:0 2px 8px ${p}44}
-.wtai-mrow.bot .wtai-bub{background:rgba(51,65,85,.4);color:#e2e8f0;border-bottom-left-radius:4px}
-.wtai-caret{display:inline-block;width:2px;height:13px;background:#94a3b8;margin-left:2px;vertical-align:text-bottom;animation:wtai-blink 1s infinite}
+.wtai-mrow.bot .wtai-bub{background:#f3f4f6;color:#1f2937;border-bottom-left-radius:4px}
+.wtai-caret{display:inline-block;width:2px;height:13px;background:#6b7280;margin-left:2px;vertical-align:text-bottom;animation:wtai-blink 1s infinite}
 @keyframes wtai-blink{0%,50%{opacity:1}51%,100%{opacity:0}}
 .wtai-dots{display:inline-flex;gap:3px;align-items:center;padding:3px 0}
-.wtai-dots span{width:6px;height:6px;border-radius:50%;background:rgba(100,116,139,.6);animation:wtai-bnc 1.4s ease-in-out infinite}
+.wtai-dots span{width:6px;height:6px;border-radius:50%;background:rgba(200,210,220,.6);animation:wtai-bnc 1.4s ease-in-out infinite}
 .wtai-dots span:nth-child(2){animation-delay:.15s}
 .wtai-dots span:nth-child(3){animation-delay:.3s}
 @keyframes wtai-bnc{0%,80%,100%{transform:scale(.6);opacity:.5}40%{transform:scale(1);opacity:1}}
 @keyframes wtai-spin{to{transform:rotate(360deg)}}
 .wtai-srcs{display:flex;flex-wrap:wrap;gap:4px;margin-top:5px}
-.wtai-src{font-size:10px;color:#cbd5e1;background:rgba(51,65,85,.3);border:1px solid rgba(100,116,139,.3);border-radius:4px;padding:2px 6px;text-decoration:none}
+.wtai-src{font-size:10px;color:#6b7280;background:#f0f0f5;border:1px solid rgba(200,210,220,.4);border-radius:4px;padding:2px 6px;text-decoration:none}
 .wtai-src:hover{color:${p};border-color:${p}44}
 
 /* Empty state */
-.wtai-empty{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:20px;text-align:center}
-.wtai-ei{width:64px;height:64px;border-radius:20px;margin-bottom:14px;background:linear-gradient(135deg,${p}22,${a}22);display:flex;align-items:center;justify-content:center}
+.wtai-empty{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:center;padding:20px;text-align:center;background:#fff}
+.wtai-ei{width:64px;height:64px;border-radius:20px;margin-bottom:14px;background:linear-gradient(135deg,${p}15,${a}15);display:flex;align-items:center;justify-content:center}
 .wtai-ei svg{width:28px;height:28px;fill:${p}}
-.wtai-etitle{font-size:14px;font-weight:600;color:#334155;margin-bottom:5px}
-.wtai-esub{font-size:12px;color:#94a3b8;line-height:1.5;margin-bottom:16px}
+.wtai-etitle{font-size:14px;font-weight:600;color:#1f2937;margin-bottom:5px}
+.wtai-esub{font-size:12px;color:#6b7280;line-height:1.5;margin-bottom:16px}
 .wtai-chips{display:flex;flex-direction:column;gap:6px;width:100%}
-.wtai-chip{font-size:12px;text-align:left;padding:8px 12px;border-radius:12px;background:#f8fafc;border:1px solid #e2e8f0;color:#64748b;cursor:pointer;transition:all .15s}
+.wtai-chip{font-size:12px;text-align:left;padding:8px 12px;border-radius:12px;background:#f3f4f6;border:1px solid #e5e7eb;color:#4b5563;cursor:pointer;transition:all .15s}
 .wtai-chip:hover{background:${p}0f;border-color:${p}44;color:${p}}
 
 /* Input row */
-.wtai-inrow{padding:10px 12px;border-top:1px solid rgba(148,163,184,.12);display:flex;align-items:center;gap:6px;flex-shrink:0}
-.wtai-input{flex:1;background:rgba(51,65,85,.2);border:1px solid rgba(100,116,139,.3);border-radius:20px;padding:9px 14px;font-size:13.5px;color:#e2e8f0;outline:none;transition:border-color .15s,box-shadow .15s,background .15s;min-width:0}
-.wtai-input:focus{border-color:${p};box-shadow:0 0 0 3px ${p}33;background:rgba(51,65,85,.4);color:#f1f5f9}
+.wtai-inrow{padding:10px 12px;border-top:1px solid rgba(200,210,220,.3);display:flex;align-items:center;gap:6px;flex-shrink:0;background:#fafbfc}
+.wtai-input{flex:1;background:#f3f4f6;border:1px solid #e5e7eb;border-radius:20px;padding:9px 14px;font-size:13.5px;color:#1f2937;outline:none;transition:border-color .15s,box-shadow .15s,background .15s;min-width:0}
+.wtai-input:focus{border-color:${p};box-shadow:0 0 0 3px ${p}33;background:#fff;color:#111}
 .wtai-input:disabled{opacity:.6}
-.wtai-input::placeholder{color:rgba(100,116,139,.6)}
+.wtai-input::placeholder{color:rgba(107,114,128,.5)}
 .wtai-ibtn{width:36px;height:36px;border-radius:50%;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:all .15s}
-.wtai-mic{background:#f1f5f9;color:#64748b}
-.wtai-mic:hover{background:#e2e8f0}
+.wtai-mic{background:#f0f0f5;color:#6366f1}
+.wtai-mic:hover{background:#e8e8f5}
 .wtai-mic.on{background:#fee2e2;color:#ef4444;animation:wtai-pulse 1.2s ease-in-out infinite}
 .wtai-mic svg{width:15px;height:15px;fill:currentColor}
 .wtai-send{background:linear-gradient(135deg,${p},${a});box-shadow:0 2px 8px ${p}55}
@@ -222,7 +222,7 @@
 .wtai-send:disabled{opacity:.35;cursor:not-allowed;box-shadow:none}
 .wtai-send.stop{background:linear-gradient(135deg,#ef4444,#dc2626) !important;box-shadow:0 2px 8px rgba(239,68,68,.5) !important;opacity:1 !important;cursor:pointer !important}
 .wtai-send svg{width:14px;height:14px;fill:#fff}
-.wtai-foot{text-align:center;padding:5px;font-size:10px;color:#cbd5e1;border-top:1px solid rgba(148,163,184,.08);flex-shrink:0}
+.wtai-foot{text-align:center;padding:5px;font-size:10px;color:#9ca3af;border-top:1px solid rgba(200,210,220,.2);flex-shrink:0;background:#f9fafb}
 .wtai-foot a{color:${p};text-decoration:none}
 @media(max-width:480px){.wtai-panel{right:8px;left:8px;bottom:8px;width:auto;max-width:none;height:calc(100vh - 88px)}.wtai-launch{right:16px;bottom:16px}}
 
@@ -1092,22 +1092,22 @@
               const last = msgs[msgs.length - 1];
               if (last) { last.content = fullAnswer; last.streaming = true; }
               render();
-              // ── Flush text to TTS ─────────────────────────────────────────
+              // ── Flush text to TTS — aggressive for low latency ──────────────
               let m;
-              // 1. Sentence-ending punctuation (. ! ?)
+              // 1. Sentence-ending punctuation (. ! ?) — always send immediately
               while ((m = /^([\s\S]+?[.!?])\s/.exec(ttsPendingText)) !== null) {
                 ttsEnqueue(m[1]);
                 ttsPendingText = ttsPendingText.slice(m[0].length);
               }
-              // 2. Comma / semicolon / colon after 20+ chars
-              while ((m = /^([\s\S]{20,}?[,;:])\s/.exec(ttsPendingText)) !== null) {
+              // 2. Comma / semicolon / colon after 12+ chars (was 20 — faster)
+              while ((m = /^([\s\S]{12,}?[,;:])\s/.exec(ttsPendingText)) !== null) {
                 ttsEnqueue(m[1]);
                 ttsPendingText = ttsPendingText.slice(m[0].length);
               }
-              // 3. Force-flush at word boundary after 28 chars
-              if (ttsPendingText.length > 28) {
-                const cut = ttsPendingText.lastIndexOf(" ", 24);
-                if (cut > 4) { ttsEnqueue(ttsPendingText.slice(0, cut)); ttsPendingText = ttsPendingText.slice(cut + 1); }
+              // 3. Force-flush at word boundary after 18 chars (was 28 — much faster)
+              if (ttsPendingText.length > 18) {
+                const cut = ttsPendingText.lastIndexOf(" ", 15);
+                if (cut > 3) { ttsEnqueue(ttsPendingText.slice(0, cut)); ttsPendingText = ttsPendingText.slice(cut + 1); }
               }
             } else if (evt.type === "sources") {
               sources = evt.sources || [];
