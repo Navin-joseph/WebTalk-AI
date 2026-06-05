@@ -7,27 +7,6 @@ import ConfirmModal from "@/components/ConfirmModal";
 
 interface ApiKey { id: string; name: string; key_prefix: string; created_at: string; last_used_at?: string; }
 
-/** Build the ready-to-paste embed snippet for a given API key. */
-function buildSnippet(apiKey: string): string {
-  const lines = [
-    '<script defer src="https://web-talk-ai.vercel.app/widget.js"></script>',
-    '<script>',
-    'document.addEventListener("DOMContentLoaded", function () {',
-    '  WebTalkAI.init({',
-    `    apiKey: "${apiKey}",`,
-    '    simliApiKey: "zxvcgjq9ijl9rjot3rfjoo",',
-    '    simliFaceId: "dd10cb5a-d31d-4f12-b69f-6db3383c006e",',
-    '    theme: "light",',
-    '    position: "bottom-right",',
-    '    voiceEnabled: true,',
-    '    ttsAutoPlay: true',
-    '  });',
-    '});',
-    '</script>'
-  ];
-  return lines.join('\n');
-}
-
 export default function ApiKeysPage() {
   const [keys, setKeys] = useState<ApiKey[]>([]);
   const [newKeyName, setNewKeyName] = useState("");
@@ -80,7 +59,11 @@ export default function ApiKeysPage() {
   }
 
   // Snippet shown in the embed section — uses real key when freshly created
-  const snippet = buildSnippet(createdKey ?? "YOUR_API_KEY");
+  const apiKey = createdKey ?? "YOUR_API_KEY";
+  const s1 = "<script defer src=\"https://web-talk-ai.vercel.app/widget.js\"><" + "/script>";
+  const s2 = "<script>";
+  const s3 = "</script>";
+  const snippet = s1 + "\n" + s2 + "\ndocument.addEventListener(\"DOMContentLoaded\", function () {\n  WebTalkAI.init({\n    apiKey: \"" + apiKey + "\",\n    simliApiKey: \"zxvcgjq9ijl9rjot3rfjoo\",\n    simliFaceId: \"dd10cb5a-d31d-4f12-b69f-6db3383c006e\",\n    theme: \"light\",\n    position: \"bottom-right\",\n    voiceEnabled: true,\n    ttsAutoPlay: true\n  });\n});\n" + s3;
 
   return (
     <div className="space-y-8">
