@@ -14,10 +14,17 @@ function buildSnippet(apiKey: string) {
 document.addEventListener("DOMContentLoaded", function () {
   WebTalkAI.init({
     apiKey: "${apiKey}",
-    theme: "dark",
+
+    // Theme: "light" | "dark"
+    theme: "light",
     position: "bottom-right",
     voiceEnabled: true,
-    ttsAutoPlay: true
+    ttsAutoPlay: true,
+
+    // Optional: Enable realistic talking avatar (Simli.ai WebRTC)
+    // Get credentials from: https://app.simli.ai
+    // simliApiKey: "your_simli_api_key",
+    // simliFaceId: "your_simli_face_id"
   });
 });
 <\/script>`;
@@ -200,9 +207,8 @@ export default function ApiKeysPage() {
         <div className="flex items-start gap-2.5 bg-violet-50 border border-violet-200 rounded-xl p-3.5 mb-4 mt-3">
           <Sparkles size={15} className="text-violet-600 mt-0.5 flex-shrink-0" />
           <p className="text-xs text-violet-900 leading-relaxed">
-            <strong>Low-latency AI with real-time lip-sync</strong> — Uses <strong>Groq Llama-3.1-8B</strong> for instant responses,
-            <strong>Deepgram Nova-3</strong> for speech-to-text, and <strong>Cartesia Sonic-3.5</strong> for 80–150ms streaming TTS.
-            Avatar mouth animates in perfect sync via Web Audio API. Optional Simli.ai WebRTC for realistic talking head.
+            <strong>Low-latency AI with real-time lip-sync</strong> — <strong>Groq Llama-3.1-8B</strong> for instant responses (sub-50ms latency), <strong>Deepgram Nova-3</strong> for speech-to-text, <strong>Cartesia Sonic-3.5</strong> for 80–150ms streaming TTS.
+            Real-time mouth animation with <100ms lip-sync. <strong>Optional:</strong> Simli.ai WebRTC for realistic talking avatar with perfect lip-sync.
           </p>
         </div>
 
