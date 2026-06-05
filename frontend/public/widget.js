@@ -154,12 +154,12 @@
 .wtai-badge{position:absolute;top:-1px;right:-1px;width:12px;height:12px;border-radius:50%;background:#34d399;border:2px solid #fff}
 
 /* Panel */
-.wtai-panel{position:fixed;${side}:24px;bottom:92px;z-index:2147483647;width:380px;max-width:calc(100vw - 32px);height:580px;max-height:calc(100vh - 120px);background:rgba(255,255,255,.97);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);border-radius:24px;border:1px solid rgba(255,255,255,.6);box-shadow:0 20px 60px rgba(15,23,42,.2),0 4px 16px rgba(15,23,42,.08);display:none;flex-direction:column;overflow:hidden}
+.wtai-panel{position:fixed;${side}:24px;bottom:92px;z-index:2147483647;width:380px;max-width:calc(100vw - 32px);height:580px;max-height:calc(100vh - 120px);background:rgba(15,23,42,.95);backdrop-filter:blur(24px);-webkit-backdrop-filter:blur(24px);border-radius:24px;border:1px solid rgba(100,116,139,.4);box-shadow:0 20px 60px rgba(0,0,0,.3),0 4px 16px rgba(0,0,0,.15);display:none;flex-direction:column;overflow:hidden}
 .wtai-panel.open{display:flex;animation:wtai-fadein .3s cubic-bezier(.16,1,.3,1)}
 @keyframes wtai-fadein{from{opacity:0;transform:translateY(12px) scale(.96)}to{opacity:1;transform:translateY(0) scale(1)}}
 
 /* Header */
-.wtai-head{padding:13px 16px;display:flex;align-items:center;gap:10px;border-bottom:1px solid rgba(148,163,184,.12);background:linear-gradient(135deg,${p}0f,${a}0f);flex-shrink:0}
+.wtai-head{padding:13px 16px;display:flex;align-items:center;gap:10px;border-bottom:1px solid rgba(100,116,139,.2);background:rgba(51,65,85,.3);flex-shrink:0}
 .wtai-av{width:36px;height:36px;border-radius:10px;flex-shrink:0;background:linear-gradient(135deg,${p},${a});display:flex;align-items:center;justify-content:center;transition:box-shadow .3s}
 .wtai-av svg{width:18px;height:18px;fill:#fff}
 .wtai-av-active{box-shadow:0 0 0 3px ${p}44;animation:wtai-pulse 1.5s ease-in-out infinite}
@@ -175,7 +175,7 @@
 /* Messages */
 .wtai-msgs{flex:1;overflow-y:auto;padding:14px 14px 10px;display:flex;flex-direction:column;gap:10px}
 .wtai-msgs::-webkit-scrollbar{width:4px}
-.wtai-msgs::-webkit-scrollbar-thumb{background:#e2e8f0;border-radius:2px}
+.wtai-msgs::-webkit-scrollbar-thumb{background:rgba(100,116,139,.5);border-radius:2px}
 .wtai-mrow{display:flex}
 .wtai-mrow.user{justify-content:flex-end}
 .wtai-mrow.bot{justify-content:flex-start;align-items:flex-end;gap:7px}
@@ -183,16 +183,16 @@
 .wtai-mav svg{width:13px;height:13px;fill:#fff}
 .wtai-bub{max-width:82%;padding:9px 13px;border-radius:18px;font-size:13.5px;line-height:1.55;word-wrap:break-word;white-space:pre-wrap}
 .wtai-mrow.user .wtai-bub{background:linear-gradient(135deg,${p},${a});color:#fff;border-bottom-right-radius:4px;box-shadow:0 2px 8px ${p}44}
-.wtai-mrow.bot .wtai-bub{background:#f1f5f9;color:#334155;border-bottom-left-radius:4px}
+.wtai-mrow.bot .wtai-bub{background:rgba(51,65,85,.4);color:#e2e8f0;border-bottom-left-radius:4px}
 .wtai-caret{display:inline-block;width:2px;height:13px;background:#94a3b8;margin-left:2px;vertical-align:text-bottom;animation:wtai-blink 1s infinite}
 @keyframes wtai-blink{0%,50%{opacity:1}51%,100%{opacity:0}}
 .wtai-dots{display:inline-flex;gap:3px;align-items:center;padding:3px 0}
-.wtai-dots span{width:6px;height:6px;border-radius:50%;background:#94a3b8;animation:wtai-bnc 1.4s ease-in-out infinite}
+.wtai-dots span{width:6px;height:6px;border-radius:50%;background:rgba(100,116,139,.6);animation:wtai-bnc 1.4s ease-in-out infinite}
 .wtai-dots span:nth-child(2){animation-delay:.15s}
 .wtai-dots span:nth-child(3){animation-delay:.3s}
 @keyframes wtai-bnc{0%,80%,100%{transform:scale(.6);opacity:.5}40%{transform:scale(1);opacity:1}}
 .wtai-srcs{display:flex;flex-wrap:wrap;gap:4px;margin-top:5px}
-.wtai-src{font-size:10px;color:#64748b;background:#fff;border:1px solid #e2e8f0;border-radius:4px;padding:2px 6px;text-decoration:none}
+.wtai-src{font-size:10px;color:#cbd5e1;background:rgba(51,65,85,.3);border:1px solid rgba(100,116,139,.3);border-radius:4px;padding:2px 6px;text-decoration:none}
 .wtai-src:hover{color:${p};border-color:${p}44}
 
 /* Empty state */
@@ -207,9 +207,10 @@
 
 /* Input row */
 .wtai-inrow{padding:10px 12px;border-top:1px solid rgba(148,163,184,.12);display:flex;align-items:center;gap:6px;flex-shrink:0}
-.wtai-input{flex:1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:20px;padding:9px 14px;font-size:13.5px;color:#334155;outline:none;transition:border-color .15s,box-shadow .15s,background .15s;min-width:0}
-.wtai-input:focus{border-color:${p}88;box-shadow:0 0 0 3px ${p}1a;background:#fff}
+.wtai-input{flex:1;background:rgba(51,65,85,.2);border:1px solid rgba(100,116,139,.3);border-radius:20px;padding:9px 14px;font-size:13.5px;color:#e2e8f0;outline:none;transition:border-color .15s,box-shadow .15s,background .15s;min-width:0}
+.wtai-input:focus{border-color:${p};box-shadow:0 0 0 3px ${p}33;background:rgba(51,65,85,.4);color:#f1f5f9}
 .wtai-input:disabled{opacity:.6}
+.wtai-input::placeholder{color:rgba(100,116,139,.6)}
 .wtai-ibtn{width:36px;height:36px;border-radius:50%;border:none;cursor:pointer;display:flex;align-items:center;justify-content:center;flex-shrink:0;transition:all .15s}
 .wtai-mic{background:#f1f5f9;color:#64748b}
 .wtai-mic:hover{background:#e2e8f0}
