@@ -10,7 +10,7 @@ interface ApiKey { id: string; name: string; key_prefix: string; created_at: str
 /** Build the ready-to-paste embed snippet for a given API key. */
 function buildSnippet(apiKey: string) {
   return `<!-- WebTalk AI Widget v4 — paste before </body> -->
-<!-- Real-time lip-sync: 5-viseme audio-driven animation, no external APIs needed -->
+<!-- Real-time Simli.ai avatar with streaming TTS, low-latency response -->
 <script defer src="https://web-talk-ai.vercel.app/widget.js"></script>
 <script>
   document.addEventListener("DOMContentLoaded", function () {
@@ -18,18 +18,18 @@ function buildSnippet(apiKey: string) {
       apiKey:   "${apiKey}",
 
       // ── Appearance ────────────────────────────────────────────────────
-      theme:    "purple",          // "purple" | "blue" | "green" | "dark"
+      theme:    "dark",           // "dark" | "purple" | "blue" | "green"
       position: "bottom-right",   // "bottom-right" | "bottom-left"
 
       // ── Avatar ────────────────────────────────────────────────────────
-      // avatarUrl: URL of the photo shown in the widget header
-      // avatarIdleVideo: (optional) short looping .mp4 for idle animation
-      avatarUrl: "https://web-talk-ai.vercel.app/avatar.jpg",
+      // Optional: Simli.ai WebRTC for realistic talking head (requires API key + face ID)
+      // Get from https://app.simli.ai
+      // simliApiKey: "your-simli-api-key",
+      // simliFaceId: "your-face-id",
 
-      // ── Voice & real-time lip-sync ────────────────────────────────────
+      // ── Voice & AI Settings ────────────────────────────────────────────
       // voiceEnabled: show mic button for speech input
-      // ttsAutoPlay:  AI replies spoken aloud with live viseme lip-sync
-      //               (AA / IH / OU / EE / OH shapes driven by Web Audio API)
+      // ttsAutoPlay:  AI replies spoken aloud with real-time lip-sync
       voiceEnabled: true,
       ttsAutoPlay:  true,
     });
@@ -210,13 +210,13 @@ export default function ApiKeysPage() {
           </div>
         </div>
 
-        {/* Lip-sync info notice */}
+        {/* Features notice */}
         <div className="flex items-start gap-2.5 bg-violet-50 border border-violet-100 rounded-xl p-3.5 mb-4 mt-3">
           <Sparkles size={15} className="text-violet-500 mt-0.5 flex-shrink-0" />
           <p className="text-xs text-violet-700 leading-relaxed">
-            <strong>Real-time lip-sync is built in</strong> — the avatar&apos;s mouth animates live as the AI speaks, driven entirely
-            by Web Audio API frequency analysis (AA / IH / OU / EE / OH visemes). No external APIs, no API keys, no latency.
-            Works on any website out of the box.
+            <strong>Low-latency AI with real-time lip-sync</strong> — Uses <strong>Groq Llama-3.1-8B</strong> for instant responses,
+            <strong>Deepgram Nova-3</strong> for speech-to-text, and <strong>Cartesia Sonic-3.5</strong> for 80–150ms streaming TTS.
+            Avatar mouth animates in perfect sync via Web Audio API. Optional Simli.ai WebRTC for realistic talking head.
           </p>
         </div>
 
