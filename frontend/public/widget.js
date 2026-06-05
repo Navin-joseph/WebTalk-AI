@@ -753,20 +753,28 @@
 
   /** Initialise Simli WebRTC session. Loads simli-client from ESM CDN. */
   async function _initSimliAvatar() {
-    if (!cfg.simliApiKey || !cfg.simliFaceId) return;
+    if (!cfg.simliApiKey || !cfg.simliFaceId) {
+      console.log("[WebTalkAI] Simli not configured, using photo puppet-warp");
+      return;
+    }
     if (_simliReady || _simliClient) return;
 
     const video   = document.getElementById("wtai-simli-video");
     const audio   = document.getElementById("wtai-simli-audio");
-    if (!video || !audio) return;
+    if (!video || !audio) {
+      console.warn("[WebTalkAI] Simli video/audio elements not found");
+      return;
+    }
 
     try {
+      console.log("[WebTalkAI] Initializing Simli WebRTC...");
       const {
         SimliClient,
         generateSimliSessionToken,
         generateIceServers,
       } = await import("https://esm.sh/simli-client@3.0.1");
 
+      console.log("[WebTalkAI] Generating Simli session token...");
       const tokenResp = await generateSimliSessionToken({
         apiKey: cfg.simliApiKey,
         config: {
@@ -778,42 +786,61 @@
         },
       });
 
+      if (!tokenResp?.session_token) {
+        throw new Error("No session token returned from Simli");
+      }
+
+      console.log("[WebTalkAI] Getting ICE servers...");
       const iceServers = await generateIceServers(cfg.simliApiKey);
 
+      console.log("[WebTalkAI] Creating SimliClient...");
       const client = new SimliClient(
         tokenResp.session_token, video, audio, iceServers
       );
 
       client.on("start", () => {
+        console.log("[WebTalkAI] Simli WebRTC connected");
         _simliClient = client;
         _simliReady  = true;
-        // Hide loading screen, reveal video
         const loading = document.getElementById("wtai-avatar-loading");
-        if (loading) { loading.style.opacity = "0"; setTimeout(() => { loading.style.display = "none"; }, 400); }
+        if (loading) {
+          loading.style.opacity = "0";
+          setTimeout(() => { loading.style.display = "none"; }, 400);
+        }
         video.style.opacity = "1";
       });
 
       client.on("stop", () => {
+        console.log("[WebTalkAI] Simli session stopped");
         _simliReady = false;
         _simliClient = null;
-        // Auto-reconnect after 1.5 s
         const loading = document.getElementById("wtai-avatar-loading");
-        if (loading) { loading.style.display = "flex"; setTimeout(() => { loading.style.opacity = "1"; }, 10); }
+        if (loading) {
+          loading.style.display = "flex";
+          setTimeout(() => { loading.style.opacity = "1"; }, 10);
+        }
         video.style.opacity = "0";
         setTimeout(_initSimliAvatar, 1500);
       });
 
-      client.on("startup_error", () => {
+      client.on("startup_error", (msg) => {
+        console.error("[WebTalkAI] Simli startup error:", msg);
         _simliReady = false;
-        console.warn("[WebTalkAI] Simli startup error");
       });
 
+      client.on("error", (msg) => {
+        console.warn("[WebTalkAI] Simli error:", msg);
+      });
+
+      console.log("[WebTalkAI] Starting Simli client...");
       _simliClient = client;
       await client.start();
     } catch (e) {
-      console.warn("[WebTalkAI] Simli init failed:", e);
+      console.error("[WebTalkAI] Simli init failed:", e);
       _simliClient = null;
       _simliReady  = false;
+      // Show error in console
+      console.log("[WebTalkAI] Falling back to photo puppet-warp");
     }
   }
 
