@@ -1164,9 +1164,11 @@
     const headers = { "Content-Type": "application/json", "X-API-Key": cfg.apiKey };
     const body    = JSON.stringify({ text });
 
-    // ── MediaSource streaming path ──────────────────────────────────────────
+    // ── When Simli is active: use blob endpoint — needs full PCM-16 for lip sync ─
+    // MSE streaming returns blob:null which means Simli never receives audio data
     const supportsMS = typeof MediaSource !== "undefined"
-      && MediaSource.isTypeSupported("audio/mpeg");
+      && MediaSource.isTypeSupported("audio/mpeg")
+      && !_simliReady;   // ← skip streaming when Simli is active
 
     if (supportsMS) {
       try {
@@ -1252,13 +1254,17 @@
         _ttsResolve = resolve;
         audio.oncanplay = () => {
           startLipSync(audio);
-          // Send PCM-16 to Simli if ready and we have the full blob
+          // Send PCM-16 to Simli for lip-sync (blob is always set when Simli active)
           if (_simliReady && blob && _simliClient) {
+            console.log("[WebTalkAI] Converting audio to PCM-16 for Simli...");
             _blobToPCM16(blob).then(pcm16 => {
               if (pcm16 && _simliClient && _simliReady) {
+                console.log("[WebTalkAI] Sending PCM-16 to Simli:", pcm16.byteLength, "bytes");
                 _simliClient.sendAudioData(pcm16);
               }
-            }).catch(() => {});
+            }).catch(e => console.error("[WebTalkAI] PCM-16 error:", e));
+          } else if (_simliReady && !blob) {
+            console.warn("[WebTalkAI] Simli ready but blob is null — audio won't sync");
           }
         };
         audio.onended = () => {
