@@ -501,9 +501,7 @@ export default function DashboardAI() {
               style={{ background:"linear-gradient(to bottom,rgba(0,0,0,.65),transparent)", zIndex:11 }}>
               <div>
                 <p className="text-sm font-bold text-white leading-tight" style={{ textShadow:"0 1px 4px rgba(0,0,0,.5)" }}>Dashboard Assistant</p>
-                <p className="text-[10.5px] text-white/75">
-                  {simliReady ? "🟢 Live avatar · Simli.ai" : "AI Assistant · Live lip-sync"}
-                </p>
+                <p className="text-[10.5px] text-white/75">AI Assistant</p>
               </div>
               <div className="flex items-center gap-1">
                 {speaking && (

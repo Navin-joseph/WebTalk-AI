@@ -36,24 +36,27 @@
   let _ttsResolve = null;
   let _ttsFetchAbort = null;
 
-  // ── Lip-sync / puppet-warp state ──────────────────────────────────────────────
+  // ── Simli.ai WebRTC avatar state ─────────────────────────────────────────────
+  let _simliClient  = null;    // SimliClient instance
+  let _simliReady   = false;   // WebRTC connected + video flowing
+
+  // ── Lip-sync / puppet-warp state (used only when Simli not configured) ───────
   let _lipAudioCtx = null;
-  let _lipAnimId   = null;     // audio-analysis RAF id
+  let _lipAnimId   = null;
   let _lipAnalyser = null;
   let _lipSource   = null;
 
-  // Full-canvas puppet renderer (replaces both the photo <img> and the overlay)
-  let _photoCanvas = null;     // <canvas id="wtai-photo">
+  // Canvas puppet renderer
+  let _photoCanvas = null;
   let _photoCtx    = null;
-  let _sourceImg   = null;     // hidden <img id="wtai-photo-src"> for pixel access
-  let _mouthCfg    = { centerY: 0, mouthW: 0 };   // detected mouth position
-  let _idleRafId   = null;     // idle-animation + puppet RAF id
-  let _idleTime    = 0;        // accumulated time (seconds)
-  let _idleLastT   = 0;        // last timestamp for delta
+  let _sourceImg   = null;
+  let _mouthCfg    = { centerY: 0, mouthW: 0 };
+  let _idleRafId   = null;
+  let _idleTime    = 0;
+  let _idleLastT   = 0;
 
-  // Smoothed per-viseme weights
-  const _vw = { aa: 0, ih: 0, ou: 0, ee: 0, oh: 0 };  // current (smoothed)
-  const _vt = { aa: 0, ih: 0, ou: 0, ee: 0, oh: 0 };  // target from analyser
+  const _vw = { aa: 0, ih: 0, ou: 0, ee: 0, oh: 0 };
+  const _vt = { aa: 0, ih: 0, ou: 0, ee: 0, oh: 0 };
   let _smoothAmp = 0;
 
   const NUM_BARS = 12;
@@ -716,6 +719,102 @@
     for (let i=0; i<NUM_BARS; i++) { const b=_getBar(i); if(b) b.style.height="3px"; }
   }
 
+  // ── Simli.ai WebRTC avatar ────────────────────────────────────────────────────
+
+  /** Convert an audio Blob to PCM-16 Uint8Array at 16 kHz mono (for Simli). */
+  async function _blobToPCM16(blob) {
+    try {
+      if (!_lipAudioCtx || _lipAudioCtx.state === "closed")
+        _lipAudioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      const arrayBuffer = await blob.arrayBuffer();
+      const decoded     = await _lipAudioCtx.decodeAudioData(arrayBuffer);
+      const targetSR    = 16000;
+      const numFrames   = Math.ceil(decoded.duration * targetSR);
+      const offCtx      = new OfflineAudioContext(1, numFrames, targetSR);
+      const src         = offCtx.createBufferSource();
+      src.buffer        = decoded;
+      src.connect(offCtx.destination);
+      src.start();
+      const rendered = await offCtx.startRendering();
+      const f32      = rendered.getChannelData(0);
+      const i16      = new Int16Array(f32.length);
+      for (let i = 0; i < f32.length; i++) {
+        const s = Math.max(-1, Math.min(1, f32[i]));
+        i16[i]  = s < 0 ? s * 0x8000 : s * 0x7FFF;
+      }
+      return new Uint8Array(i16.buffer);
+    } catch (e) {
+      console.warn("[WebTalkAI] PCM16 error:", e);
+      return null;
+    }
+  }
+
+  /** Initialise Simli WebRTC session. Loads simli-client from ESM CDN. */
+  async function _initSimliAvatar() {
+    if (!cfg.simliApiKey || !cfg.simliFaceId) return;
+    if (_simliReady || _simliClient) return;
+
+    const video   = document.getElementById("wtai-simli-video");
+    const audio   = document.getElementById("wtai-simli-audio");
+    if (!video || !audio) return;
+
+    try {
+      const {
+        SimliClient,
+        generateSimliSessionToken,
+        generateIceServers,
+      } = await import("https://esm.sh/simli-client@3.0.1");
+
+      const tokenResp = await generateSimliSessionToken({
+        apiKey: cfg.simliApiKey,
+        config: {
+          faceId:           cfg.simliFaceId,
+          handleSilence:    true,
+          maxSessionLength: 600,
+          maxIdleTime:      600,
+          model:            "fasttalk",
+        },
+      });
+
+      const iceServers = await generateIceServers(cfg.simliApiKey);
+
+      const client = new SimliClient(
+        tokenResp.session_token, video, audio, iceServers
+      );
+
+      client.on("start", () => {
+        _simliClient = client;
+        _simliReady  = true;
+        // Hide loading screen, reveal video
+        const loading = document.getElementById("wtai-avatar-loading");
+        if (loading) { loading.style.opacity = "0"; setTimeout(() => { loading.style.display = "none"; }, 400); }
+        video.style.opacity = "1";
+      });
+
+      client.on("stop", () => {
+        _simliReady = false;
+        _simliClient = null;
+        // Auto-reconnect after 1.5 s
+        const loading = document.getElementById("wtai-avatar-loading");
+        if (loading) { loading.style.display = "flex"; setTimeout(() => { loading.style.opacity = "1"; }, 10); }
+        video.style.opacity = "0";
+        setTimeout(_initSimliAvatar, 1500);
+      });
+
+      client.on("startup_error", () => {
+        _simliReady = false;
+        console.warn("[WebTalkAI] Simli startup error");
+      });
+
+      _simliClient = client;
+      await client.start();
+    } catch (e) {
+      console.warn("[WebTalkAI] Simli init failed:", e);
+      _simliClient = null;
+      _simliReady  = false;
+    }
+  }
+
   // ── Build DOM ─────────────────────────────────────────────────────────────────
   function buildUI() {
     const root = document.body || document.documentElement;
@@ -732,17 +831,43 @@
     panel.id = "wtai-panel";
 
     const waveBarIds = Array.from({length: NUM_BARS}, (_,i) => `<span id="wtai-wb${i}" style="height:3px"></span>`).join("");
+    const useSimli   = !!(cfg.simliApiKey && cfg.simliFaceId);
 
-    panel.innerHTML = `
-      <div class="wtai-photo-wrap av-idle" id="wtai-photo-wrap">
-        <!-- Hidden source image — used only for pixel access by the puppet warp -->
+    // ── Avatar area: Simli WebRTC video OR canvas puppet-warp ────────────────
+    const avatarArea = useSimli ? `
+        <!-- Simli WebRTC video stream -->
+        <video id="wtai-simli-video" autoplay playsinline
+          style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;
+                 z-index:2;opacity:0;transition:opacity .6s ease;pointer-events:none">
+        </video>
+        <audio id="wtai-simli-audio" autoplay></audio>
+        <!-- Loading screen while WebRTC connects -->
+        <div id="wtai-avatar-loading"
+          style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;
+                 justify-content:center;gap:12px;z-index:1;
+                 background:linear-gradient(160deg,#1e1b4b 0%,#111827 60%,#0f172a 100%);
+                 transition:opacity .4s ease">
+          <div style="position:relative;width:56px;height:56px">
+            <div style="position:absolute;inset:0;border-radius:50%;border:2px solid rgba(124,58,237,.2)"></div>
+            <div style="position:absolute;inset:0;border-radius:50%;border:2px solid transparent;
+                        border-top-color:#a78bfa;animation:wtai-spin 1s linear infinite"></div>
+          </div>
+          <span style="font-size:11px;font-weight:600;color:rgba(255,255,255,.4);
+                       letter-spacing:.05em;text-transform:uppercase">Connecting avatar</span>
+        </div>
+    ` : `
+        <!-- Canvas puppet-warp (photo-based, no API needed) -->
         <img id="wtai-photo-src" src="${cfg.avatarUrl}" crossorigin="anonymous"
           style="display:none;position:absolute" alt="">
-        <!-- Full canvas replaces the <img> — renders photo + idle animation + puppet warp -->
         <canvas id="wtai-photo" class="wtai-photo av-idle"
           style="position:absolute;inset:0;width:100%;height:100%;display:block;z-index:1"></canvas>
         <div class="wtai-blink-eye" id="wtai-blink-l"></div>
         <div class="wtai-blink-eye" id="wtai-blink-r"></div>
+    `;
+
+    panel.innerHTML = `
+      <div class="wtai-photo-wrap av-idle" id="wtai-photo-wrap">
+        ${avatarArea}
         <div class="wtai-photo-glow" id="wtai-photo-glow"></div>
         <div class="wtai-topbar">
           <div class="wtai-topbar-info">
@@ -860,6 +985,10 @@
       launcher.style.background = "#334155";
       launcher.innerHTML = ICO.close;
       setTimeout(() => inputEl?.focus(), 80);
+      // Init Simli WebRTC if configured
+      if (cfg.simliApiKey && cfg.simliFaceId) {
+        _initSimliAvatar();
+      }
       // Init canvas + start idle loop on first open
       if (!_photoCtx) _initPhotoCanvas();
       else if (!_idleRafId) _startIdleLoop();
@@ -1047,7 +1176,7 @@
           }
         }, { once: true });
 
-        return { audio, url: msUrl };
+        return { audio, url: msUrl, blob: null };
       } catch (e) {
         if (e.name === "AbortError") return null;
         // fall through to blob
@@ -1060,8 +1189,9 @@
         { method: "POST", headers, body, signal });
       _ttsFetchAbort = null;
       if (!res.ok || !ttsOn) return null;
-      const url = URL.createObjectURL(await res.blob());
-      return { audio: new Audio(url), url };
+      const blob = await res.blob();
+      const url = URL.createObjectURL(blob);
+      return { audio: new Audio(url), url, blob };
     } catch (e) {
       if (e.name === "AbortError") return null;
       return null;
@@ -1082,7 +1212,7 @@
       // Pre-fetch next sentence immediately
       if (ttsQueue.length > 0 && ttsOn) prefetch = _createAudio(ttsQueue[0]);
 
-      const { audio, url } = result;
+      const { audio, url, blob } = result;
       currentAudio = audio; currentAudioUrl = url;
       speaking = true;
       setStatus("Speaking…");
@@ -1091,7 +1221,17 @@
 
       await new Promise(resolve => {
         _ttsResolve = resolve;
-        audio.oncanplay = () => startLipSync(audio);
+        audio.oncanplay = () => {
+          startLipSync(audio);
+          // Send PCM-16 to Simli if ready and we have the full blob
+          if (_simliReady && blob && _simliClient) {
+            _blobToPCM16(blob).then(pcm16 => {
+              if (pcm16 && _simliClient && _simliReady) {
+                _simliClient.sendAudioData(pcm16);
+              }
+            }).catch(() => {});
+          }
+        };
         audio.onended = () => {
           _ttsResolve = null;
           stopLipSync();
@@ -1203,6 +1343,9 @@
       // Optional: provide a short looping video for idle animation
       // avatarIdleVideo: "/avatar-idle.mp4"
       avatarIdleVideo: options.avatarIdleVideo || null,
+      // Optional: Simli.ai WebRTC avatar (realistic talking head)
+      simliApiKey: options.simliApiKey || null,
+      simliFaceId: options.simliFaceId || null,
     };
     sessionId = sid();
     ttsOn = options.ttsAutoPlay !== false;
