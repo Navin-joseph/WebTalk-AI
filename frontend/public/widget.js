@@ -191,6 +191,7 @@
 .wtai-dots span:nth-child(2){animation-delay:.15s}
 .wtai-dots span:nth-child(3){animation-delay:.3s}
 @keyframes wtai-bnc{0%,80%,100%{transform:scale(.6);opacity:.5}40%{transform:scale(1);opacity:1}}
+@keyframes wtai-spin{to{transform:rotate(360deg)}}
 .wtai-srcs{display:flex;flex-wrap:wrap;gap:4px;margin-top:5px}
 .wtai-src{font-size:10px;color:#cbd5e1;background:rgba(51,65,85,.3);border:1px solid rgba(100,116,139,.3);border-radius:4px;padding:2px 6px;text-decoration:none}
 .wtai-src:hover{color:${p};border-color:${p}44}
