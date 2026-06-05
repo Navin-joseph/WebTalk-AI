@@ -14,17 +14,11 @@ function buildSnippet(apiKey: string) {
 document.addEventListener("DOMContentLoaded", function () {
   WebTalkAI.init({
     apiKey: "${apiKey}",
-
-    // Theme: "light" | "dark"
     theme: "light",
     position: "bottom-right",
     voiceEnabled: true,
-    ttsAutoPlay: true,
-
-    // Optional: Enable realistic talking avatar (Simli.ai WebRTC)
-    // Get credentials from: https://app.simli.ai
-    // simliApiKey: "your_simli_api_key",
-    // simliFaceId: "your_simli_face_id"
+    ttsAutoPlay: true
+    // Optional Simli avatar: simliApiKey, simliFaceId
   });
 });
 <\/script>`;
