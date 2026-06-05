@@ -869,7 +869,7 @@
           style="position:absolute;inset:0;width:100%;height:100%;object-fit:cover;
                  z-index:2;opacity:0;transition:opacity .6s ease;pointer-events:none">
         </video>
-        <audio id="wtai-simli-audio" autoplay></audio>
+        <audio id="wtai-simli-audio" autoplay muted></audio>
         <!-- Loading screen while WebRTC connects -->
         <div id="wtai-avatar-loading"
           style="position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;
@@ -1250,23 +1250,18 @@
       setAvatarState("speaking");
       setActive(true);
 
+      // Send PCM-16 to Simli IMMEDIATELY (before playback starts)
+      // This eliminates the gap between sentences where lips stop moving
+      if (_simliReady && blob && _simliClient) {
+        _blobToPCM16(blob).then(pcm16 => {
+          if (pcm16 && _simliClient && _simliReady)
+            _simliClient.sendAudioData(pcm16);
+        }).catch(() => {});
+      }
+
       await new Promise(resolve => {
         _ttsResolve = resolve;
-        audio.oncanplay = () => {
-          startLipSync(audio);
-          // Send PCM-16 to Simli for lip-sync (blob is always set when Simli active)
-          if (_simliReady && blob && _simliClient) {
-            console.log("[WebTalkAI] Converting audio to PCM-16 for Simli...");
-            _blobToPCM16(blob).then(pcm16 => {
-              if (pcm16 && _simliClient && _simliReady) {
-                console.log("[WebTalkAI] Sending PCM-16 to Simli:", pcm16.byteLength, "bytes");
-                _simliClient.sendAudioData(pcm16);
-              }
-            }).catch(e => console.error("[WebTalkAI] PCM-16 error:", e));
-          } else if (_simliReady && !blob) {
-            console.warn("[WebTalkAI] Simli ready but blob is null — audio won't sync");
-          }
-        };
+        audio.oncanplay = () => startLipSync(audio);
         audio.onended = () => {
           _ttsResolve = null;
           stopLipSync();
