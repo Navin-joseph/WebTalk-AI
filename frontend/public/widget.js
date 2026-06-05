@@ -1214,17 +1214,30 @@
       }
     }
 
-    // ── Blob fallback (Safari / MSE unavailable) ────────────────────────────
+    // ── Blob fetch (always used when Simli active; fallback otherwise) ─────────
     try {
       const res = await fetch(`${cfg.apiUrl}/api/v1/widget/tts`,
         { method: "POST", headers, body, signal });
       _ttsFetchAbort = null;
-      if (!res.ok || !ttsOn) return null;
-      const blob = await res.blob();
+      if (!res.ok || !ttsOn) {
+        console.error("[WebTalkAI] TTS failed:", res.status, await res.text().catch(() => ""));
+        return null;
+      }
+      const rawBlob = await res.blob();
+      // Force audio/mpeg MIME type — server may not set it, causing playback failure
+      const blob = rawBlob.type.startsWith("audio")
+        ? rawBlob
+        : new Blob([await rawBlob.arrayBuffer()], { type: "audio/mpeg" });
+      if (blob.size < 500) {
+        console.error("[WebTalkAI] TTS blob too small:", blob.size, "bytes — likely error response");
+        return null;
+      }
       const url = URL.createObjectURL(blob);
+      console.log("[WebTalkAI] TTS ready:", blob.size, "bytes,", blob.type);
       return { audio: new Audio(url), url, blob };
     } catch (e) {
       if (e.name === "AbortError") return null;
+      console.error("[WebTalkAI] TTS fetch error:", e.message);
       return null;
     }
   }
