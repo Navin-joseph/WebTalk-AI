@@ -18,7 +18,6 @@ document.addEventListener("DOMContentLoaded", function () {
     position: "bottom-right",
     voiceEnabled: true,
     ttsAutoPlay: true
-    // Optional Simli avatar: simliApiKey, simliFaceId
   });
 });
 <\/script>`;
