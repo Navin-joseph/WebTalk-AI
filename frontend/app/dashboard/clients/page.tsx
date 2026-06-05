@@ -9,18 +9,20 @@ interface ApiKey { id: string; name: string; key_prefix: string; created_at: str
 
 /** Build the ready-to-paste embed snippet for a given API key. */
 function buildSnippet(apiKey: string) {
-  return `<script defer src="https://web-talk-ai.vercel.app/widget.js"><` + `/script>
-<script>
-document.addEventListener("DOMContentLoaded", function () {
+  const script1 = '<script defer src="https://web-talk-ai.vercel.app/widget.js">';
+  const script2 = '</script>';
+  const init = `document.addEventListener("DOMContentLoaded", function () {
   WebTalkAI.init({
     apiKey: "${apiKey}",
+    simliApiKey: "zxvcgjq9ijl9rjot3rfjoo",
+    simliFaceId: "dd10cb5a-d31d-4f12-b69f-6db3383c006e",
     theme: "light",
     position: "bottom-right",
     voiceEnabled: true,
     ttsAutoPlay: true
   });
-});
-<` + `/script>`;
+});`;
+  return `${script1}${script2}\n<script>\n${init}\n${script2}`;
 }
 
 export default function ApiKeysPage() {
