@@ -1,14 +1,28 @@
 "use client";
 /**
- * DashboardAI  —  AI assistant with looping video avatar
+ * DashboardAI  —  AI assistant with MuseTalk lip-sync avatar
+ * ────────────────────────────────────────────────────────────────────────────
+ * Pipeline (per TTS chunk):
+ *   1. LLM text token arrives → buffered in ttsPendingRef
+ *   2. Text flushed to TTS queue at sentence / punctuation boundaries
+ *   3. drainTTS() picks up queue items:
+ *      a. PRIMARY: POST /api/v1/conversations/musetalk  (text → lip-sync video)
+ *         Backend: text → Cartesia PCM → fal-ai/musetalk → returns {video_url}
+ *         Frontend: set musetalkUrl → SimliAvatar loads & plays video (audio baked in)
+ *         Spinner shows while backend processes; hides on video onCanPlay.
+ *      b. FALLBACK: POST /api/v1/conversations/tts  (text → MP3 blob)
+ *         Used when MuseTalk is disabled or the endpoint is unavailable.
+ *         Audio-only with waveform bars; avatar loops its idle video.
  *
- * Avatar: AvatarVideo (SimliAvatar.tsx) — looping video, instant display.
- *   - idle state   → video paused at frame 0 (mouth closed)
- *   - active states → video plays in a loop
- * Audio: Cartesia TTS streamed via MediaSource Extensions.
- * Waveform bars: driven by local Web Audio analysis.
+ * Spinner states:
+ *   isBaseLoading   — true until idle video fires onCanPlay (initial only)
+ *   isGenerating    — true while MuseTalk backend is processing a segment
+ *   Combined: show spinner when either is true
  *
- * Env var:  NEXT_PUBLIC_AVATAR_VIDEO_URL  (optional override)
+ * Env vars:
+ *   NEXT_PUBLIC_API_URL            — backend origin
+ *   NEXT_PUBLIC_AVATAR_VIDEO_URL   — override base idle video
+ *   NEXT_PUBLIC_MUSETALK_ENABLED   — "true" to activate MuseTalk path
  */
 
 import { useState, useEffect, useRef, useCallback } from "react";
@@ -16,14 +30,14 @@ import { createClient } from "@/lib/supabase";
 import {
   Mic, MicOff, X, Send, Volume2, VolumeX, RotateCcw, MessageSquare,
 } from "lucide-react";
-import { useAudioLipSync } from "@/hooks/useAudioLipSync";
-import { SimliAvatar, type SimliAvatarHandle } from "./SimliAvatar";
+import { useAudioLipSync }                        from "@/hooks/useAudioLipSync";
+import { SimliAvatar, type SimliAvatarHandle, BASE_VIDEO_URL } from "./SimliAvatar";
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
-
-const NUM_WAVE_BARS = 12;
+const API_URL          = process.env.NEXT_PUBLIC_API_URL          ?? "http://localhost:8000";
+const MUSETALK_ENABLED = process.env.NEXT_PUBLIC_MUSETALK_ENABLED === "true";
+const NUM_WAVE_BARS    = 12;
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -33,6 +47,8 @@ type AvatarState = "idle" | "thinking" | "listening" | "speaking";
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export default function DashboardAI() {
+
+  // ── UI state ──────────────────────────────────────────────────────────────
   const [open, setOpen]               = useState(false);
   const [messages, setMessages]       = useState<Message[]>([]);
   const [input, setInput]             = useState("");
@@ -42,30 +58,48 @@ export default function DashboardAI() {
   const [avatarState, setAvatarState] = useState<AvatarState>("idle");
   const [token, setToken]             = useState("");
   const [ttsEnabled, setTtsEnabled]   = useState(true);
-  /**
-   * isVideoLoading — true until the browser fires onCanPlay on the avatar video.
-   * Starts true whenever the panel opens so the spinner always shows first.
-   * Set to false by the onVideoReady callback wired to <SimliAvatar onVideoReady>.
-   */
-  const [isVideoLoading, setIsVideoLoading] = useState(true);
 
+  // ── Spinner states ────────────────────────────────────────────────────────
+  /**
+   * isBaseLoading  — hides base idle video until its onCanPlay fires.
+   *                  Reset only when the panel opens for the first time.
+   * isGenerating   — hides avatar and shows "Generating Avatar Sync..."
+   *                  while the MuseTalk backend processes a segment.
+   */
+  const [isBaseLoading, setIsBaseLoading] = useState(true);
+  const [isGenerating, setIsGenerating]   = useState(false);
+  const baseEverLoadedRef                 = useRef(false); // don't re-show spinner on reopen
+
+  // ── MuseTalk state ────────────────────────────────────────────────────────
+  /**
+   * musetalkUrl — when set, SimliAvatar loads and plays this video URL.
+   * The video contains Cartesia audio baked in by the backend (perfect sync).
+   * Cleared to null once the video's onEnded fires.
+   */
+  const [musetalkUrl, setMusetalkUrl] = useState<string | null>(null);
+
+  // Resolve function for the promise that blocks drainTTS until the video ends
+  const speakEndResolveRef = useRef<(() => void) | null>(null);
+
+  // ── Refs ──────────────────────────────────────────────────────────────────
   const sessionId      = useRef(`dash_${Date.now()}_${Math.random().toString(36).slice(2)}`);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const recognitionRef = useRef<any>(null);
   const abortRef       = useRef<AbortController | null>(null);
   const inputRef       = useRef<HTMLInputElement>(null);
+  const avatarRef      = useRef<SimliAvatarHandle>(null);
 
-  // Stable refs
+  // Stable refs that closures can read without stale values
   const tokenRef      = useRef(token);
   const ttsEnabledRef = useRef(ttsEnabled);
   const streamingRef  = useRef(false);
 
-  useEffect(() => { tokenRef.current     = token;      }, [token]);
-  useEffect(() => { ttsEnabledRef.current = ttsEnabled; }, [ttsEnabled]);
-  useEffect(() => { streamingRef.current  = streaming;  }, [streaming]);
+  useEffect(() => { tokenRef.current      = token;      }, [token]);
+  useEffect(() => { ttsEnabledRef.current  = ttsEnabled; }, [ttsEnabled]);
+  useEffect(() => { streamingRef.current   = streaming;  }, [streaming]);
 
-  // TTS refs
+  // ── TTS queue refs ────────────────────────────────────────────────────────
   const audioRef      = useRef<HTMLAudioElement | null>(null);
   const audioUrlRef   = useRef<string | null>(null);
   const ttsAbortRef   = useRef(false);
@@ -73,14 +107,24 @@ export default function DashboardAI() {
   const ttsRunRef     = useRef(false);
   const ttsPendingRef = useRef("");
 
-  // Waveform bars
+  // ── Waveform bars (used by audio-fallback path) ───────────────────────────
   const waveBarRefs = useRef<(HTMLSpanElement | null)[]>(Array(NUM_WAVE_BARS).fill(null));
-
-  // Avatar handle (stub for future MuseTalk integration)
-  const avatarRef = useRef<SimliAvatarHandle>(null);
-
-  // Audio analysis — drives waveform bars + sends PCM-16 to Simli for lip sync
   const { start: startLipSyncAudio, stop: stopLipSyncAudio } = useAudioLipSync();
+
+  const stopLipSync = useCallback(() => {
+    stopLipSyncAudio();
+    waveBarRefs.current.forEach(b => { if (b) b.style.height = "3px"; });
+  }, [stopLipSyncAudio]);
+
+  const startLipSync = useCallback((audioEl: HTMLAudioElement) => {
+    stopLipSync();
+    startLipSyncAudio(audioEl, frame => {
+      frame.bars.forEach((h, i) => {
+        const bar = waveBarRefs.current[i];
+        if (bar) bar.style.height = h + "px";
+      });
+    });
+  }, [stopLipSync, startLipSyncAudio]);
 
   // ── Auth ──────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -94,41 +138,32 @@ export default function DashboardAI() {
     return () => subscription.unsubscribe();
   }, []);
 
+  // ── Panel open: reset base spinner only on FIRST open ────────────────────
+  // BUG FIX: previously this effect had [open, messages] as deps, which caused
+  // isBaseLoading to reset to true on EVERY incoming message, creating the
+  // infinite "Generating Avatar Sync..." loop.
   useEffect(() => {
-    if (open) {
-      // Reset spinner every time the panel opens — video may need to re-buffer.
-      setIsVideoLoading(true);
-      setTimeout(() => inputRef.current?.focus(), 100);
-      messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    if (!open) return;
+    if (!baseEverLoadedRef.current) {
+      // First time opening — show spinner until video fires onCanPlay
+      setIsBaseLoading(true);
     }
+  }, [open]);
+
+  // Scroll / focus — separate effect so messages don't trigger spinner reset
+  useEffect(() => {
+    if (!open) return;
+    setTimeout(() => inputRef.current?.focus(), 100);
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [open, messages]);
 
-  // ── Audio analysis — waveform bars only (Simli handles its own lip sync) ─────
-  const stopLipSync = useCallback(() => {
-    stopLipSyncAudio();
-    waveBarRefs.current.forEach(b => { if (b) b.style.height = "3px"; });
-  }, [stopLipSyncAudio]);
-
-  const startLipSync = useCallback((audioEl: HTMLAudioElement) => {
-    stopLipSync();
-    startLipSyncAudio(audioEl, (frame) => {
-      frame.bars.forEach((h, i) => {
-        const bar = waveBarRefs.current[i];
-        if (bar) bar.style.height = h + "px";
-      });
-    });
-  }, [stopLipSync, startLipSyncAudio]);
-
-  // ── TTS helpers ───────────────────────────────────────────────────────────
+  // ── Audio fallback helper ─────────────────────────────────────────────────
   /**
-   * Create an audio element for the given text.
+   * Creates an HTMLAudioElement from the MP3 blob endpoint.
    *
-   * Priority:
-   *   1. MediaSource streaming  — first bytes in ~100 ms (Chrome/Firefox)
-   *   2. Blob fallback          — Safari or if MSE unavailable
-   *
-   * The Simli/PCM-16 path has been removed. Audio is played locally;
-   * the avatar video is driven by avatarState, not audio bytes.
+   * IMPORTANT: We intentionally do NOT use the /tts/stream SSE endpoint here.
+   * That endpoint now returns raw PCM s16le (for MuseTalk) which browsers
+   * cannot play directly. The /tts blob endpoint returns a proper MP3.
    */
   const createAudio = useCallback(async (
     text: string,
@@ -136,129 +171,125 @@ export default function DashboardAI() {
     const tok = tokenRef.current;
     if (!text.trim() || !tok || ttsAbortRef.current) return null;
 
-    const headers = { "Content-Type": "application/json", Authorization: `Bearer ${tok}` };
-    const body    = JSON.stringify({ text });
-
-    // ── MediaSource streaming path (Chrome / Firefox) ─────────────────────
-    const supportsMS =
-      typeof window !== "undefined" &&
-      "MediaSource" in window &&
-      MediaSource.isTypeSupported("audio/mpeg");
-
-    if (supportsMS) {
-      try {
-        const r = await fetch(`${API_URL}/api/v1/conversations/tts/stream`, {
-          method: "POST", headers, body,
-        });
-        if (!r.ok || !r.body || ttsAbortRef.current) throw new Error("stream failed");
-
-        const ms    = new MediaSource();
-        const msUrl = URL.createObjectURL(ms);
-        const audio = new Audio(msUrl);
-        audio.preload = "auto";
-        audioUrlRef.current = msUrl;
-
-        ms.addEventListener("sourceopen", async () => {
-          let sb: SourceBuffer;
-          try { sb = ms.addSourceBuffer("audio/mpeg"); }
-          catch { URL.revokeObjectURL(msUrl); return; }
-
-          const queue: ArrayBuffer[] = [];
-          let busy = false, done = false;
-
-          const flush = () => {
-            if (busy || !queue.length) {
-              if (!busy && done && ms.readyState === "open")
-                try { ms.endOfStream(); } catch { /* ignore */ }
-              return;
-            }
-            busy = true;
-            try { sb.appendBuffer(queue.shift()!); }
-            catch { busy = false; }
-          };
-
-          sb.addEventListener("updateend", () => { busy = false; flush(); });
-
-          const reader = r.body!.getReader();
-          for (;;) {
-            const { done: d, value } = await reader.read();
-            if (d) { done = true; flush(); break; }
-            if (ttsAbortRef.current) { reader.cancel(); break; }
-            queue.push(value.buffer as ArrayBuffer);
-            flush();
-          }
-        }, { once: true });
-
-        return audio;
-      } catch { /* fall through to blob */ }
-    }
-
-    // ── Blob fallback (Safari, or if streaming fetch failed) ─────────────
     try {
       const r = await fetch(`${API_URL}/api/v1/conversations/tts`, {
-        method: "POST", headers, body,
+        method:  "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${tok}` },
+        body:    JSON.stringify({ text }),
       });
       if (!r.ok || ttsAbortRef.current) return null;
-      const blob = await r.blob();
-      const url  = URL.createObjectURL(blob);
+
+      const rawBlob = await r.blob();
+      // Ensure audio/mpeg MIME type — some servers send application/octet-stream
+      const blob = rawBlob.type.startsWith("audio")
+        ? rawBlob
+        : new Blob([await rawBlob.arrayBuffer()], { type: "audio/mpeg" });
+      if (blob.size < 500) return null; // likely an error JSON, not audio
+
+      const url = URL.createObjectURL(blob);
       audioUrlRef.current = url;
       return new Audio(url);
     } catch { return null; }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
+  // ── Stop all TTS / MuseTalk immediately ──────────────────────────────────
   const stopTTS = useCallback(() => {
-    ttsAbortRef.current   = true;
-    ttsQRef.current       = [];
-    ttsRunRef.current     = false;
-    ttsPendingRef.current = "";
+    ttsAbortRef.current    = true;
+    ttsQRef.current        = [];
+    ttsRunRef.current      = false;
+    ttsPendingRef.current  = "";
     stopLipSync();
-    if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; }
+    setIsGenerating(false);
+    setMusetalkUrl(null);
+    speakEndResolveRef.current?.();
+    speakEndResolveRef.current = null;
+    if (audioRef.current)  { audioRef.current.pause(); audioRef.current = null; }
     if (audioUrlRef.current) { URL.revokeObjectURL(audioUrlRef.current); audioUrlRef.current = null; }
     setSpeaking(false);
     setAvatarState(streamingRef.current ? "thinking" : "idle");
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [stopLipSync]);
 
+  // ── TTS drain loop ────────────────────────────────────────────────────────
   const drainTTS = useCallback(async () => {
     if (ttsRunRef.current) return;
     ttsRunRef.current = true;
-    let prefetch: ReturnType<typeof createAudio> | null = null;
 
     while (ttsQRef.current.length > 0 && !ttsAbortRef.current) {
-      const text  = ttsQRef.current.shift()!;
-      const audio = await (prefetch || createAudio(text));
-      prefetch    = null;
-      if (!audio || ttsAbortRef.current) continue;
-
-      // Pre-fetch the next sentence while current one plays
-      if (ttsQRef.current.length > 0 && !ttsAbortRef.current)
-        prefetch = createAudio(ttsQRef.current[0]);
+      const text = ttsQRef.current.shift()!;
+      if (!text.trim()) continue;
 
       setSpeaking(true);
       setAvatarState("speaking");
-      audioRef.current = audio;
 
-      await new Promise<void>(resolve => {
-        audio.oncanplay = () => startLipSync(audio);
-        audio.play().catch(() => { /* autoplay policy — ok */ });
-        audio.onended = () => {
-          stopLipSync();
-          if (audioUrlRef.current) {
-            URL.revokeObjectURL(audioUrlRef.current);
-            audioUrlRef.current = null;
+      let handled = false;
+
+      // ── PRIMARY: MuseTalk pipeline ───────────────────────────────────────
+      if (MUSETALK_ENABLED && !ttsAbortRef.current) {
+        setIsGenerating(true); // show "Generating Avatar Sync..." spinner
+
+        try {
+          const tok = tokenRef.current;
+          const res = await fetch(`${API_URL}/api/v1/conversations/musetalk`, {
+            method:  "POST",
+            headers: { "Content-Type": "application/json", Authorization: `Bearer ${tok}` },
+            body:    JSON.stringify({
+              text,
+              base_video_url: BASE_VIDEO_URL,
+            }),
+          });
+
+          if (res.ok && !ttsAbortRef.current) {
+            const data = await res.json() as { video_url?: string };
+
+            if (data.video_url && !ttsAbortRef.current) {
+              // Hand off to SimliAvatar layer 2.
+              // onSpeakVideoReady will hide the spinner (setIsGenerating(false)).
+              // onSpeakVideoEnd will resolve this promise so we advance the queue.
+              setMusetalkUrl(data.video_url);
+
+              await new Promise<void>(resolve => {
+                speakEndResolveRef.current = resolve;
+              });
+
+              setMusetalkUrl(null);
+              handled = true;
+            }
           }
-          audioRef.current = null;
-          resolve();
-        };
-        audio.onerror = () => { stopLipSync(); resolve(); };
-      });
+        } catch { /* fall through to audio fallback */ }
+
+        setIsGenerating(false);
+      }
+
+      // ── FALLBACK: audio blob + waveform bars ─────────────────────────────
+      if (!handled && !ttsAbortRef.current) {
+        const audio = await createAudio(text);
+        if (audio && !ttsAbortRef.current) {
+          audioRef.current = audio;
+
+          await new Promise<void>(resolve => {
+            audio.oncanplay = () => startLipSync(audio);
+            audio.play().catch(() => { /* autoplay policy — ok */ });
+            audio.onended = () => {
+              stopLipSync();
+              if (audioUrlRef.current) {
+                URL.revokeObjectURL(audioUrlRef.current);
+                audioUrlRef.current = null;
+              }
+              audioRef.current = null;
+              resolve();
+            };
+            audio.onerror = () => { stopLipSync(); resolve(); };
+          });
+        }
+      }
     }
 
-    if (prefetch) prefetch.then(() => {}).catch(() => {});
     ttsRunRef.current = false;
     if (ttsQRef.current.length === 0) {
       setSpeaking(false);
       setAvatarState(streamingRef.current ? "thinking" : "idle");
+      setIsGenerating(false);
     }
   }, [createAudio, startLipSync, stopLipSync]);
 
@@ -269,14 +300,14 @@ export default function DashboardAI() {
     drainTTS();
   }, [drainTTS]);
 
-  // ── Chat ──────────────────────────────────────────────────────────────────
+  // ── Chat stream ───────────────────────────────────────────────────────────
   const sendMessage = useCallback(async (text: string) => {
     if (!text.trim() || !token) return;
     abortRef.current?.abort();
-    abortRef.current  = new AbortController();
+    abortRef.current       = new AbortController();
     stopTTS();
-    ttsAbortRef.current   = false;
-    ttsPendingRef.current = "";
+    ttsAbortRef.current    = false;
+    ttsPendingRef.current  = "";
 
     if (streamingRef.current) {
       setMessages(prev => {
@@ -337,27 +368,32 @@ export default function DashboardAI() {
                 next[next.length - 1] = { role: "assistant", content: fullAnswer, streaming: true };
                 return next;
               });
-              // ── Flush text — aggressive for low lip-sync latency ─────────────
+
+              // ── Flush text to TTS queue (aggressive for low latency) ────
               let m: RegExpMatchArray | null;
-              // 1. Sentence-ending punctuation (. ! ?) — always send immediately
+
+              // 1. Sentence-ending punctuation — flush immediately
               while ((m = /^([\s\S]+?[.!?])\s/.exec(ttsPendingRef.current)) !== null) {
                 enqueueTTS(m[1]);
                 ttsPendingRef.current = ttsPendingRef.current.slice(m[0].length);
               }
-              // 2. Comma / semicolon / colon after 12+ chars (was 20 — faster flush)
+              // 2. Comma / semicolon / colon after 12+ chars
               while ((m = /^([\s\S]{12,}?[,;:])\s/.exec(ttsPendingRef.current)) !== null) {
                 enqueueTTS(m[1]);
                 ttsPendingRef.current = ttsPendingRef.current.slice(m[0].length);
               }
-              // 3. Force-flush at word boundary after 18 chars (was 28 — much faster)
+              // 3. Force-flush at word boundary after 18 chars
               if (ttsPendingRef.current.length > 18) {
                 const cut = ttsPendingRef.current.lastIndexOf(" ", 15);
-                if (cut > 3) { enqueueTTS(ttsPendingRef.current.slice(0, cut)); ttsPendingRef.current = ttsPendingRef.current.slice(cut + 1); }
+                if (cut > 3) {
+                  enqueueTTS(ttsPendingRef.current.slice(0, cut));
+                  ttsPendingRef.current = ttsPendingRef.current.slice(cut + 1);
+                }
               }
             } else if (evt.type === "done") {
               fullAnswer = evt.answer || fullAnswer;
             }
-          } catch { /* skip parse errors */ }
+          } catch { /* skip malformed SSE events */ }
         }
       }
     } catch (err: unknown) {
@@ -379,6 +415,7 @@ export default function DashboardAI() {
     }
   }, [token, messages, stopTTS, enqueueTTS]);
 
+  // ── UI handlers ───────────────────────────────────────────────────────────
   function handleSubmit(e: React.FormEvent) {
     e.preventDefault();
     if (input.trim()) sendMessage(input);
@@ -398,7 +435,9 @@ export default function DashboardAI() {
     setListening(true);
     setAvatarState("listening");
     const recognition = new SR();
-    recognition.continuous = false; recognition.interimResults = false; recognition.lang = "en-US";
+    recognition.continuous     = false;
+    recognition.interimResults = false;
+    recognition.lang           = "en-US";
     recognition.onstart  = () => { setListening(true);  setAvatarState("listening"); };
     recognition.onend    = () => { setListening(false); setAvatarState(streamingRef.current ? "thinking" : "idle"); };
     recognition.onerror  = () => { setListening(false); setAvatarState("idle"); };
@@ -424,6 +463,8 @@ export default function DashboardAI() {
     : streaming                 ? "Thinking…"
     :                             "Ask about your AI agent";
 
+  const showSpinner = isBaseLoading || isGenerating;
+
   // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div className="fixed bottom-6 right-6 z-50 flex flex-col items-end gap-3 pointer-events-none">
@@ -433,20 +474,38 @@ export default function DashboardAI() {
           className="pointer-events-auto w-[380px] rounded-3xl shadow-2xl border border-slate-300 flex flex-col overflow-hidden"
           style={{ height: 600, background: "rgba(255,255,255,0.98)", backdropFilter: "blur(24px)", WebkitBackdropFilter: "blur(24px)" }}
         >
-          {/* ── Avatar header ── */}
+          {/* ── Avatar header ─────────────────────────────────────────────── */}
           <div className="relative flex-shrink-0 overflow-hidden" style={{ height: 230, background: "#f8fafc" }}>
 
-            {/* ── Looping video avatar — no WebRTC handshake, instant DOM mount ── */}
+            {/* ── Two-layer avatar: idle loop (back) + MuseTalk video (front) ── */}
             <SimliAvatar
               ref={avatarRef}
               avatarState={avatarState}
-              onVideoReady={() => setIsVideoLoading(false)}
+              musetalkVideoUrl={musetalkUrl}
+              onBaseVideoReady={() => {
+                // Mark as ever-loaded so future panel opens don't re-show spinner
+                baseEverLoadedRef.current = true;
+                setIsBaseLoading(false);
+              }}
+              onSpeakVideoReady={() => {
+                // MuseTalk video has buffered → hide "Generating Avatar Sync..." spinner
+                setIsGenerating(false);
+              }}
+              onSpeakVideoEnd={() => {
+                // MuseTalk video finished → advance the TTS queue
+                speakEndResolveRef.current?.();
+                speakEndResolveRef.current = null;
+              }}
               className="absolute inset-0"
               style={{ zIndex: 2 }}
             />
 
-            {/* ── Loading spinner — shown until video fires onCanPlay ── */}
-            {isVideoLoading && (
+            {/* ── Spinner overlay ────────────────────────────────────────────
+                Shows for two distinct reasons:
+                  isBaseLoading  → initial video buffer  ("Loading...")
+                  isGenerating   → MuseTalk backend work  ("Generating Avatar Sync...")
+            ── */}
+            {showSpinner && (
               <div
                 className="absolute inset-0 flex flex-col items-center justify-center gap-3 pointer-events-none"
                 style={{
@@ -466,7 +525,7 @@ export default function DashboardAI() {
                   />
                 </div>
                 <p className="text-[11px] font-semibold text-slate-500 tracking-wide uppercase">
-                  Generating Avatar Sync...
+                  {isGenerating ? "Generating Avatar Sync..." : "Loading Avatar..."}
                 </p>
               </div>
             )}

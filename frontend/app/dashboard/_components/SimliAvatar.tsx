@@ -1,25 +1,28 @@
+"use client";
 /**
- * AvatarVideo  (replaces SimliAvatar WebRTC component)
- * ─────────────────────────────────────────────────────
- * Displays a looping video avatar with state-driven playback.
- * Removes all Simli WebRTC handshake, token generation, and ICE
- * negotiation. The avatar is visible instantly with zero async setup.
+ * AvatarVideo  —  two-layer video avatar
+ * ────────────────────────────────────────────────────────────────────────────
+ * Layer 1 (back):   base idle loop  — always visible, always silent.
+ *   • plays continuously while idle / thinking / listening
+ *   • natural, living character appearance (no frozen static frame)
  *
- * Playback behaviour:
- *   idle                → video paused at frame 0  (mouth closed)
- *   thinking / listening / speaking  → video plays in a loop
+ * Layer 2 (front):  MuseTalk video  — visible only while speaking.
+ *   • loaded dynamically when musetalkVideoUrl is set
+ *   • NOT muted — contains the Cartesia vocal audio baked in by the backend
+ *   • removed from view the moment it ends; layer 1 reappears instantly
  *
- * Future MuseTalk integration:
- *   sendAudio(pcm16) will pipe raw PCM-16 bytes (16 kHz mono s16le)
- *   to the MuseTalk backend once that pipeline is wired up.
- *   Until then it is a documented no-op stub.
+ * Spinner contract (owned by parent DashboardAI):
+ *   onBaseVideoReady  → base video buffered → hide "loading" spinner
+ *   onSpeakVideoReady → musetalk video buffered → hide "generating" spinner
+ *   onSpeakVideoEnd   → musetalk finished → parent advances the TTS queue
+ *
+ * sendAudio() stub:
+ *   Kept for interface compatibility. Will pipe raw PCM-16 (16 kHz mono
+ *   s16le) to a MuseTalk streaming path when that backend route exists.
  *
  * Env var:
- *   NEXT_PUBLIC_AVATAR_VIDEO_URL   — override the default video asset.
- *   Falls back to the bundled Replicate mp4 if not set.
+ *   NEXT_PUBLIC_AVATAR_VIDEO_URL — override the default Replicate mp4.
  */
-
-"use client";
 
 import {
   forwardRef,
@@ -30,17 +33,16 @@ import {
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
-const AVATAR_VIDEO_URL =
+export const BASE_VIDEO_URL =
   process.env.NEXT_PUBLIC_AVATAR_VIDEO_URL ??
   "https://replicate.delivery/pbxt/L2hFUyTjQUalIvUBRskwEaJLCi1dwbWNMjL1NI9cQNgvMfaX/sun.mp4";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
-/** Same handle shape as the old Simli component — DashboardAI needs no import changes. */
 export interface SimliAvatarHandle {
   /**
-   * Feed raw PCM-16 audio (16 kHz mono, little-endian) for lip sync.
-   * Currently a no-op stub — will be wired to MuseTalk when ready.
+   * Feed raw PCM-16 audio (16 kHz mono, little-endian) to drive lip sync.
+   * Stub — will be wired to a streaming MuseTalk path when ready.
    */
   sendAudio(pcm16: Uint8Array): void;
   isReady(): boolean;
@@ -49,14 +51,26 @@ export interface SimliAvatarHandle {
 type AvatarState = "idle" | "thinking" | "listening" | "speaking";
 
 interface Props {
-  /** Current AI state — drives video play / pause. */
   avatarState: AvatarState;
-  /** Called the first time the video has buffered enough to play. */
-  onVideoReady?: () => void;
+
+  /**
+   * URL of a MuseTalk-generated lip-sync video (contains baked audio).
+   * Set → layer 2 loads and plays it over layer 1.
+   * null → layer 1 resumes as the only visible layer.
+   */
+  musetalkVideoUrl?: string | null;
+
+  /** Base idle video buffered enough to play — hide initial spinner. */
+  onBaseVideoReady?: () => void;
+  /** MuseTalk video buffered enough to play — hide "generating" spinner. */
+  onSpeakVideoReady?: () => void;
+  /** MuseTalk video finished — parent should advance the TTS queue. */
+  onSpeakVideoEnd?: () => void;
+
   className?: string;
   style?: React.CSSProperties;
 
-  // Legacy Simli props — accepted but unused so call sites compile unchanged.
+  // Legacy Simli props — accepted but unused so DashboardAI compiles unchanged.
   apiKey?: string;
   faceId?: string;
   onReady?: () => void;
@@ -67,68 +81,120 @@ interface Props {
 
 export const SimliAvatar = forwardRef<SimliAvatarHandle, Props>(
   function AvatarVideo(
-    { avatarState, onVideoReady, className, style, onReady },
+    {
+      avatarState,
+      musetalkVideoUrl,
+      onBaseVideoReady,
+      onSpeakVideoReady,
+      onSpeakVideoEnd,
+      className,
+      style,
+      onReady,
+    },
     ref,
   ) {
-    const videoRef = useRef<HTMLVideoElement>(null);
+    const idleRef  = useRef<HTMLVideoElement>(null);
+    const speakRef = useRef<HTMLVideoElement>(null);
 
     // ── Public handle ─────────────────────────────────────────────────────────
     useImperativeHandle(ref, () => ({
       sendAudio(pcm16: Uint8Array) {
-        // TODO: pipe PCM-16 to MuseTalk when backend integration is complete.
-        // Shape: 16-bit signed little-endian, 16 kHz, mono.
-        // Suppress unused-variable lint until wired up:
+        // TODO: stream to MuseTalk when backend route is ready.
         void pcm16;
       },
       isReady() { return true; },
     }));
 
-    // ── Signal legacy onReady immediately (no async handshake needed) ────────
+    // ── Signal legacy onReady immediately ────────────────────────────────────
     useEffect(() => {
       onReady?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
-    // ── State-driven playback ─────────────────────────────────────────────────
+    // ── Layer 1: idle video playback ─────────────────────────────────────────
+    // Always looping silently. We never pause it — a live loop looks far more
+    // natural than a frozen first frame (which browsers render as a static img).
     useEffect(() => {
-      const video = videoRef.current;
-      if (!video) return;
+      const v = idleRef.current;
+      if (!v) return;
 
-      if (avatarState === "idle") {
-        // Pause on frame 0 — shows a closed-mouth still.
-        video.pause();
-        video.currentTime = 0;
-      } else {
-        // speaking / thinking / listening — play the talking loop.
-        video.play().catch(() => {
-          // Autoplay may be blocked until first user gesture — that's fine,
-          // the video will start on the next interaction.
-        });
+      if (avatarState === "idle" || !musetalkVideoUrl) {
+        // Ensure the idle video is playing so it appears "alive"
+        v.play().catch(() => {});
       }
-    }, [avatarState]);
+      // When a musetalk video is active the idle video stays running silently
+      // underneath — no visible gap when the musetalk video ends.
+    }, [avatarState, musetalkVideoUrl]);
 
+    // ── Layer 2: MuseTalk speaking video ─────────────────────────────────────
+    useEffect(() => {
+      const v = speakRef.current;
+      if (!v) return;
+
+      if (musetalkVideoUrl) {
+        // Load the new URL; playback is triggered in onCanPlay below
+        v.src    = musetalkVideoUrl;
+        v.load();
+      } else {
+        // Clear the src so the element releases its resources
+        v.src = "";
+        try { v.load(); } catch { /* ignore */ }
+      }
+    }, [musetalkVideoUrl]);
+
+    // ── Render ────────────────────────────────────────────────────────────────
     return (
-      <video
-        ref={videoRef}
-        src={AVATAR_VIDEO_URL}
-        muted
-        playsInline
-        loop
-        preload="auto"
-        className={className}
-        // onCanPlay fires as soon as the browser has buffered enough to start
-        // playing. This is the earliest safe moment to hide the loading spinner.
-        onCanPlay={() => onVideoReady?.()}
-        style={{
-          display:    "block",
-          width:      "100%",
-          height:     "100%",
-          objectFit:  "cover",
-          // Keep the element in the DOM even while loading so the browser
-          // can buffer the video; visibility is controlled by the parent overlay.
-          ...style,
-        }}
-      />
+      <>
+        {/* ── Layer 1: base idle loop ───────────────────────────────────── */}
+        <video
+          ref={idleRef}
+          src={BASE_VIDEO_URL}
+          muted
+          playsInline
+          loop
+          autoPlay
+          preload="auto"
+          onCanPlay={() => onBaseVideoReady?.()}
+          className={className}
+          style={{
+            display:   "block",
+            width:     "100%",
+            height:    "100%",
+            objectFit: "cover",
+            ...style,
+          }}
+        />
+
+        {/* ── Layer 2: MuseTalk lip-sync video ──────────────────────────── */}
+        {/* Rendered at all times so the ref is stable; hidden via opacity   */}
+        <video
+          ref={speakRef}
+          playsInline
+          preload="auto"
+          // NOT muted — the MuseTalk video has Cartesia audio baked in.
+          // Playing it directly ensures audio + animation are perfectly locked.
+          onCanPlay={() => {
+            // Video has buffered enough — start playback and tell parent to
+            // dismiss the "Generating Avatar Sync..." spinner.
+            speakRef.current?.play().catch(() => {});
+            onSpeakVideoReady?.();
+          }}
+          onEnded={() => onSpeakVideoEnd?.()}
+          style={{
+            position:       "absolute",
+            inset:          0,
+            display:        "block",
+            width:          "100%",
+            height:         "100%",
+            objectFit:      "cover",
+            // Crossfade in when a musetalk URL is active
+            opacity:        musetalkVideoUrl ? 1 : 0,
+            transition:     "opacity 0.15s ease",
+            pointerEvents:  "none",
+            zIndex:         1,
+          }}
+        />
+      </>
     );
   },
 );
