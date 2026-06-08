@@ -51,17 +51,14 @@ export default function DashboardAI() {
   const [token, setToken]             = useState("");
   const [ttsEnabled, setTtsEnabled]   = useState(true);
 
-  // ── HeyGen session state ──────────────────────────────────────────────────
+  // ── HeyGen WebRTC state ──────────────────────────────────────────────────
   /**
    * heygenSessionId — used to send chat messages.
-   * heygenStreamUrl — the WebRTC/media stream endpoint from HeyGen.
-   * heygenAccessToken — authorization token to fetch the stream.
-   * heygenMediaStream — the live video + audio MediaStream (if available).
+   * heygenPeerConnection — RTCPeerConnection managing the WebRTC stream.
+   *                        Parent creates/manages it; passed to SimliAvatar.
    */
-  const [heygenSessionId, setHeygenSessionId]       = useState<string | null>(null);
-  const [heygenStreamUrl, setHeygenStreamUrl]       = useState<string | null>(null);
-  const [heygenAccessToken, setHeygenAccessToken]   = useState<string | null>(null);
-  const [heygenMediaStream, setHeygenMediaStream]   = useState<MediaStream | null>(null);
+  const [heygenSessionId, setHeygenSessionId]           = useState<string | null>(null);
+  const [heygenPeerConnection, setHeygenPeerConnection] = useState<RTCPeerConnection | null>(null);
 
   // ── Refs ──────────────────────────────────────────────────────────────────
   const sessionId      = useRef(`dash_${Date.now()}_${Math.random().toString(36).slice(2)}`);
@@ -99,30 +96,32 @@ export default function DashboardAI() {
     return () => subscription.unsubscribe();
   }, []);
 
-  // ── Panel open: create HeyGen session & establish WebRTC stream ──────────
+  // ── Panel open: create HeyGen session & WebRTC peer connection ──────────
   useEffect(() => {
     if (!open || !tokenRef.current) return;
 
     let isMounted = true; // track if component is still mounted
+    let pc: RTCPeerConnection | null = null;
 
     (async () => {
       try {
         // Step 1: Create HeyGen session
-        const r = await fetch(`${API_URL}/api/v1/conversations/heygen/session`, {
+        console.log("[HeyGen] Creating session...");
+        const sessionRes = await fetch(`${API_URL}/api/v1/conversations/heygen/session`, {
           method:  "POST",
           headers: { Authorization: `Bearer ${tokenRef.current}` },
         });
 
-        if (!r.ok) {
-          const errorText = await r.text();
+        if (!sessionRes.ok) {
+          const errorText = await sessionRes.text();
           console.error(
-            `[HeyGen] Session creation failed HTTP ${r.status}:`,
-            errorText.substring(0, 200),
+            `[HeyGen] Session creation failed HTTP ${sessionRes.status}:`,
+            errorText.substring(0, 300),
           );
           return;
         }
 
-        const data = await r.json() as {
+        const sessionData = await sessionRes.json() as {
           session_id: string;
           access_token: string;
           video_stream_url: string;
@@ -130,28 +129,98 @@ export default function DashboardAI() {
 
         if (!isMounted) return;
 
-        console.log("[HeyGen] Session created:", data.session_id);
-        console.log("[HeyGen] Stream URL:", data.video_stream_url.substring(0, 80) + "...");
+        console.log("[HeyGen] Session created:", sessionData.session_id);
+        setHeygenSessionId(sessionData.session_id);
 
-        if (isMounted) {
-          setHeygenSessionId(data.session_id);
-          setHeygenStreamUrl(data.video_stream_url);
-          setHeygenAccessToken(data.access_token);
+        // Step 2: Create RTCPeerConnection
+        console.log("[HeyGen] Creating RTCPeerConnection...");
+        pc = new RTCPeerConnection({
+          iceServers: [
+            { urls: ["stun:stun.l.google.com:19302"] },
+            { urls: ["stun:stun1.l.google.com:19302"] },
+          ],
+        });
 
-          console.log("[HeyGen] Stream details passed to avatar component");
+        if (!isMounted) {
+          pc.close();
+          return;
         }
+
+        // Step 3: Generate SDP offer
+        console.log("[HeyGen] Generating SDP offer...");
+        const offer = await pc.createOffer();
+        await pc.setLocalDescription(offer);
+
+        if (!isMounted) {
+          pc.close();
+          return;
+        }
+
+        // Step 4: Send SDP offer to backend, get answer from HeyGen
+        console.log("[HeyGen] Sending SDP offer to backend...");
+        const sdfRes = await fetch(
+          `${API_URL}/api/v1/conversations/heygen/webrtc`,
+          {
+            method:  "POST",
+            headers: {
+              "Content-Type": "application/json",
+              Authorization: `Bearer ${tokenRef.current}`,
+            },
+            body: JSON.stringify({
+              session_id:  sessionData.session_id,
+              access_token: sessionData.access_token,
+              sdp_offer:   offer.sdp,
+            }),
+          },
+        );
+
+        if (!sdfRes.ok) {
+          const errorText = await sdfRes.text();
+          console.error(
+            `[HeyGen] SDP exchange failed HTTP ${sdfRes.status}:`,
+            errorText.substring(0, 300),
+          );
+          pc.close();
+          return;
+        }
+
+        const sdfData = await sdfRes.json() as { sdp_answer: string };
+
+        if (!isMounted) {
+          pc.close();
+          return;
+        }
+
+        // Step 5: Set remote description (SDP answer from HeyGen)
+        console.log("[HeyGen] Setting remote SDP answer...");
+        const answer = new RTCSessionDescription({
+          type: "answer",
+          sdp:  sdfData.sdp_answer,
+        });
+        await pc.setRemoteDescription(answer);
+
+        if (!isMounted) {
+          pc.close();
+          return;
+        }
+
+        console.log("[HeyGen] WebRTC handshake complete, waiting for remote tracks...");
+        setHeygenPeerConnection(pc);
       } catch (e) {
-        console.error("[HeyGen] Session initialization error:", e);
+        console.error("[HeyGen] WebRTC setup error:", e);
+        if (pc) pc.close();
       }
     })();
 
-    // Cleanup: stop media tracks when panel closes
+    // Cleanup: close peer connection when panel closes
     return () => {
       isMounted = false;
-      setHeygenMediaStream(null);
+      if (pc && pc.connectionState !== "closed") {
+        console.log("[HeyGen] Closing peer connection");
+        pc.close();
+      }
+      setHeygenPeerConnection(null);
       setHeygenSessionId(null);
-      setHeygenStreamUrl(null);
-      setHeygenAccessToken(null);
     };
   }, [open]);
 
@@ -411,9 +480,7 @@ export default function DashboardAI() {
             {/* ── HeyGen WebRTC video stream (with audio) ── */}
             <SimliAvatar
               ref={avatarRef}
-              mediaStream={heygenMediaStream}
-              streamUrl={heygenStreamUrl}
-              streamAccessToken={heygenAccessToken}
+              peerConnection={heygenPeerConnection}
               className="absolute inset-0"
               style={{ zIndex: 2 }}
             />

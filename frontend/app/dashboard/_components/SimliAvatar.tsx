@@ -1,15 +1,10 @@
 "use client";
 /**
- * AvatarVideo  —  HeyGen Interactive Avatar WebRTC Stream
+ * AvatarVideo  —  HeyGen Interactive Avatar via WebRTC
  * ──────────────────────────────────────────────────────────────────────────
- * Receives a MediaStream object (video + audio tracks) from HeyGen and
- * renders it in a native HTML5 <video> element with audio enabled.
- *
- * Key fixes:
- *   - NOT muted (audio must be audible)
- *   - videoRef.current.srcObject = mediaStream (not src = string)
- *   - Audio tracks explicitly enabled
- *   - Proper MediaStream lifecycle management
+ * Handles the remote MediaStream from HeyGen's WebRTC connection.
+ * The parent component (DashboardAI) manages the RTCPeerConnection;
+ * this component just attaches the remote tracks to the <video> element.
  */
 
 import {
@@ -27,23 +22,18 @@ export interface SimliAvatarHandle {
 
 interface Props {
   /**
-   * MediaStream object from HeyGen containing video + audio tracks.
-   * Not a URL — a live stream object.
+   * RTCPeerConnection from HeyGen handshake.
+   * Parent (DashboardAI) creates it and manages the SDP offer/answer flow.
    */
-  mediaStream?: MediaStream | null;
-
-  /**
-   * HeyGen stream URL + access token for fetching the live stream.
-   * If provided, these are used to fetch the actual MediaStream.
-   */
-  streamUrl?: string | null;
-  streamAccessToken?: string | null;
-
+  peerConnection?: RTCPeerConnection | null;
   className?: string;
   style?: React.CSSProperties;
 
   // Legacy props — ignored but kept for interface compatibility
+  mediaStream?: any;
   videoStreamUrl?: string | null;
+  streamUrl?: string | null;
+  streamAccessToken?: string | null;
   avatarState?: string;
   musetalkVideoUrl?: string | null;
   onBaseVideoReady?: () => void;
@@ -58,9 +48,7 @@ interface Props {
 export const SimliAvatar = forwardRef<SimliAvatarHandle, Props>(
   function AvatarVideo(
     {
-      mediaStream,
-      streamUrl,
-      streamAccessToken,
+      peerConnection,
       className,
       style,
       onReady,
@@ -68,14 +56,13 @@ export const SimliAvatar = forwardRef<SimliAvatarHandle, Props>(
     ref,
   ) {
     const videoRef = useRef<HTMLVideoElement>(null);
-    const fetchAbortRef = useRef<AbortController | null>(null);
 
     // ── Public handle ─────────────────────────────────────────────────────────
     useImperativeHandle(ref, () => ({
       sendAudio() {
         // No-op — HeyGen handles audio natively
       },
-      isReady() { return !!mediaStream; },
+      isReady() { return !!peerConnection; },
     }));
 
     // ── Signal ready immediately ──────────────────────────────────────────────
@@ -84,112 +71,97 @@ export const SimliAvatar = forwardRef<SimliAvatarHandle, Props>(
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
-    // ── Fetch MediaStream from HeyGen URL if needed ───────────────────────
-    // If streamUrl + token are provided but no mediaStream yet, fetch it.
+    // ── Attach RTCPeerConnection event handlers ────────────────────────────────
     useEffect(() => {
-      if (!streamUrl || !streamAccessToken) return;
-      if (mediaStream) return; // already have a stream
+      if (!peerConnection) return;
 
-      let isMounted = true;
+      // CRITICAL: Listen for remote tracks from HeyGen
+      // When HeyGen sends video+audio, this fires with the remote stream
+      const handleTrack = (event: RTCTrackEvent) => {
+        console.log(
+          "[AvatarVideo] Remote track received:",
+          event.track.kind,
+          `(${event.track.enabled ? "enabled" : "disabled"})`,
+        );
 
-      (async () => {
-        try {
-          fetchAbortRef.current = new AbortController();
+        // The stream contains both video and audio tracks
+        if (event.streams && event.streams[0]) {
+          const stream = event.streams[0];
+          const video = videoRef.current;
 
-          // Fetch the stream from HeyGen with authentication
-          const res = await fetch(streamUrl, {
-            method:    "GET",
-            headers:   { "Authorization": `Bearer ${streamAccessToken}` },
-            signal:    fetchAbortRef.current.signal,
-          });
-
-          if (!res.ok) {
-            console.error(
-              `[AvatarVideo] Stream fetch failed HTTP ${res.status}:`,
-              res.statusText,
+          if (video) {
+            console.log(
+              "[AvatarVideo] Attaching stream to video element:",
+              `${stream.getVideoTracks().length} video tracks,`,
+              `${stream.getAudioTracks().length} audio tracks`,
             );
-            return;
+
+            // Attach the entire MediaStream (video + audio)
+            video.srcObject = stream;
+
+            // Ensure all tracks are enabled
+            stream.getTracks().forEach(track => {
+              track.enabled = true;
+              console.log(
+                `[AvatarVideo] Track enabled: ${track.kind} (${track.id})`,
+              );
+            });
+
+            // Try to play (may be blocked by autoplay policy)
+            video.play().catch(err => {
+              console.warn("[AvatarVideo] Autoplay blocked:", err.message);
+            });
           }
-
-          if (!isMounted || !res.body) return;
-
-          // Convert the fetch response to a playable format
-          // HeyGen's endpoint returns a media stream (MP4, HLS, etc.)
-          const blob = await res.blob();
-          const objectUrl = URL.createObjectURL(blob);
-
-          if (isMounted) {
-            const video = videoRef.current;
-            if (video) {
-              video.src = objectUrl;
-              video.load();
-              video.play().catch(err => {
-                console.warn("[AvatarVideo] autoplay blocked:", err.message);
-              });
-              console.log("[AvatarVideo] Stream loaded from URL");
-            }
-          }
-        } catch (err) {
-          if (err instanceof Error && err.name === "AbortError") return; // cancelled
-          console.error("[AvatarVideo] Stream fetch error:", err);
         }
-      })();
-
-      return () => {
-        isMounted = false;
-        fetchAbortRef.current?.abort();
       };
-    }, [streamUrl, streamAccessToken, mediaStream]);
 
-    // ── Attach MediaStream to video element ─────────────────────────────────
-    // This is the critical fix: WebRTC/live streams use srcObject, not src.
-    useEffect(() => {
-      const video = videoRef.current;
-      if (!video || !mediaStream) return;
+      const handleConnectionStateChange = () => {
+        console.log(
+          "[AvatarVideo] Connection state:",
+          peerConnection.connectionState,
+        );
 
-      // Assign the live MediaStream object to the video element.
-      // This includes both video and audio tracks.
-      video.srcObject = mediaStream;
+        if (peerConnection.connectionState === "failed") {
+          console.error("[AvatarVideo] WebRTC connection failed");
+        }
+      };
 
-      // Ensure audio tracks are not muted or blocked.
-      const audioTracks = mediaStream.getAudioTracks();
-      audioTracks.forEach(track => {
-        track.enabled = true; // explicitly enable audio
-      });
+      const handleIceConnectionStateChange = () => {
+        console.log(
+          "[AvatarVideo] ICE connection state:",
+          peerConnection.iceConnectionState,
+        );
+      };
 
-      const videoTracks = mediaStream.getVideoTracks();
-      videoTracks.forEach(track => {
-        track.enabled = true; // explicitly enable video
-      });
-
-      // Attempt to play. Autoplay may be blocked by browser policy,
-      // but user interaction (clicking send/speak) will trigger playback.
-      video.play().catch(err => {
-        console.warn("[AvatarVideo] autoplay blocked:", err.message);
-        // Not an error — user will interact, triggering playback
-      });
-
-      console.log(
-        "[AvatarVideo] MediaStream attached:",
-        `audio=${audioTracks.length}`,
-        `video=${videoTracks.length}`,
+      // Register event listeners
+      peerConnection.addEventListener("track", handleTrack);
+      peerConnection.addEventListener(
+        "connectionstatechange",
+        handleConnectionStateChange,
+      );
+      peerConnection.addEventListener(
+        "iceconnectionstatechange",
+        handleIceConnectionStateChange,
       );
 
-      // Cleanup: stop all tracks when component unmounts or stream changes.
+      // Cleanup
       return () => {
-        if (video.srcObject) {
-          const tracks = (video.srcObject as MediaStream).getTracks();
-          tracks.forEach(track => track.stop());
-          video.srcObject = null;
-        }
+        peerConnection.removeEventListener("track", handleTrack);
+        peerConnection.removeEventListener(
+          "connectionstatechange",
+          handleConnectionStateChange,
+        );
+        peerConnection.removeEventListener(
+          "iceconnectionstatechange",
+          handleIceConnectionStateChange,
+        );
       };
-    }, [mediaStream]);
+    }, [peerConnection]);
 
     return (
       <video
         ref={videoRef}
-        // CRITICAL: NOT muted — audio must be audible.
-        // If muted={true}, the <audio> tracks are silenced.
+        // CRITICAL: NOT muted — HeyGen audio must be audible
         autoPlay
         playsInline
         style={{
@@ -197,7 +169,7 @@ export const SimliAvatar = forwardRef<SimliAvatarHandle, Props>(
           width:     "100%",
           height:    "100%",
           objectFit: "cover",
-          backgroundColor: "#000", // black background while loading
+          backgroundColor: "#000",
           ...style,
         }}
         className={className}

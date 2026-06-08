@@ -267,6 +267,14 @@ class _HeyGenChatRequest(BaseModel):
     text: str
 
 
+class _HeyGenWebRTCRequest(BaseModel):
+    """Initiate WebRTC peer connection handshake with HeyGen."""
+
+    session_id: str
+    access_token: str
+    sdp_offer: str
+
+
 @router.post("/heygen/session")
 async def heygen_create_session(
     user: TokenPayload = Depends(get_current_user),
@@ -344,6 +352,83 @@ async def heygen_send_chat(
         raise HTTPException(status_code=500, detail=f"Chat failed: {str(e)[:200]}")
 
     return result
+
+
+@router.post("/heygen/webrtc")
+async def heygen_webrtc_handshake(
+    payload: _HeyGenWebRTCRequest,
+    user: TokenPayload = Depends(get_current_user),
+):
+    """
+    WebRTC peer connection handshake with HeyGen.
+
+    Frontend sends its local SDP offer; we forward it to HeyGen and return
+    HeyGen's SDP answer so the frontend can complete the WebRTC connection.
+
+    Args:
+        session_id: HeyGen session ID
+        access_token: JWT token from HeyGen session
+        sdp_offer: Browser's local SDP offer
+
+    Returns:
+        {
+            "sdp_answer": str  — HeyGen's SDP answer (set as remote description)
+        }
+    """
+    import httpx
+
+    heygen_api_url = "https://api.heygen.com/v1"
+    session_id = payload.session_id.strip()
+    sdp_offer = payload.sdp_offer.strip()
+
+    if not session_id or not sdp_offer:
+        raise HTTPException(status_code=400, detail="session_id and sdp_offer required")
+
+    try:
+        # Forward SDP offer to HeyGen's WebRTC endpoint
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(
+                f"{heygen_api_url}/streaming.start_connection",
+                headers={
+                    "X-Api-Key":         payload.access_token,
+                    "Content-Type":      "application/json",
+                },
+                json={"session_id": session_id, "sdp_offer": sdp_offer},
+            )
+
+            if resp.status_code != 200:
+                body = resp.text
+                logger.error(
+                    "HeyGen WebRTC handshake failed HTTP %s: %s",
+                    resp.status_code, body[:400],
+                )
+                raise HTTPException(
+                    status_code=502,
+                    detail=f"HeyGen WebRTC failed: {resp.status_code}",
+                )
+
+            data = resp.json()
+
+            # HeyGen returns: {code, data: {sdp_answer}}
+            if data.get("code") != 0:
+                error_msg = data.get("message", "unknown error")
+                logger.error("HeyGen WebRTC error: %s", error_msg)
+                raise HTTPException(status_code=502, detail=f"HeyGen error: {error_msg}")
+
+            sdp_answer = data.get("data", {}).get("sdp_answer")
+            if not sdp_answer:
+                logger.error("HeyGen WebRTC response missing sdp_answer: %s", data)
+                raise HTTPException(status_code=502, detail="HeyGen response missing SDP answer")
+
+            logger.info("HeyGen WebRTC handshake complete: %s", session_id)
+            return {"sdp_answer": sdp_answer}
+
+    except httpx.HTTPError as e:
+        logger.error("HeyGen WebRTC request failed: %s", e)
+        raise HTTPException(status_code=502, detail=f"HeyGen request error: {str(e)[:200]}")
+    except Exception as e:
+        logger.error("HeyGen WebRTC error: %s", e)
+        raise HTTPException(status_code=500, detail=f"WebRTC error: {str(e)[:200]}")
 
 
 def _upsert_conversation(db: Client, client_id: str, session_id: str, user_msg: str, ai_msg: str):
