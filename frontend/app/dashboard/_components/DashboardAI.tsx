@@ -28,6 +28,20 @@ import {
 } from "lucide-react";
 import { HeyGenAvatar, type HeyGenAvatarHandle } from "./HeyGenAvatar";
 
+// ── Speech Recognition Type Declaration ────────────────────────────────────
+interface ISpeechRecognition extends EventTarget {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  onstart: ((this: ISpeechRecognition, ev: Event) => void) | null;
+  onend: ((this: ISpeechRecognition, ev: Event) => void) | null;
+  onerror: ((this: ISpeechRecognition, ev: Event) => void) | null;
+  onresult: ((this: ISpeechRecognition, ev: SpeechRecognitionEvent) => void) | null;
+  start(): void;
+  stop(): void;
+  abort(): void;
+}
+
 // ── Config ────────────────────────────────────────────────────────────────────
 const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
@@ -76,7 +90,7 @@ export default function DashboardAI(): React.ReactElement {
   // ── Refs ──────────────────────────────────────────────────────────────────
   const sessionId = useRef<string>(`dash_${Date.now()}_${Math.random().toString(36).slice(2)}`);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  const recognitionRef = useRef<SpeechRecognition | null>(null);
+  const recognitionRef = useRef<ISpeechRecognition | null>(null);
   const abortRef = useRef<AbortController | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   const avatarRef = useRef<HeyGenAvatarHandle>(null);
@@ -491,8 +505,8 @@ export default function DashboardAI(): React.ReactElement {
     }
     // Access SpeechRecognition from window (both standard and webkit variants)
     const w = window as Window & {
-      SpeechRecognition?: typeof SpeechRecognition;
-      webkitSpeechRecognition?: typeof SpeechRecognition;
+      SpeechRecognition?: new () => ISpeechRecognition;
+      webkitSpeechRecognition?: new () => ISpeechRecognition;
     };
     const SR = w.SpeechRecognition ?? w.webkitSpeechRecognition;
     if (!SR) {
