@@ -42,6 +42,12 @@ export default function DashboardAI() {
   const [avatarState, setAvatarState] = useState<AvatarState>("idle");
   const [token, setToken]             = useState("");
   const [ttsEnabled, setTtsEnabled]   = useState(true);
+  /**
+   * isVideoLoading — true until the browser fires onCanPlay on the avatar video.
+   * Starts true whenever the panel opens so the spinner always shows first.
+   * Set to false by the onVideoReady callback wired to <SimliAvatar onVideoReady>.
+   */
+  const [isVideoLoading, setIsVideoLoading] = useState(true);
 
   const sessionId      = useRef(`dash_${Date.now()}_${Math.random().toString(36).slice(2)}`);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -90,6 +96,8 @@ export default function DashboardAI() {
 
   useEffect(() => {
     if (open) {
+      // Reset spinner every time the panel opens — video may need to re-buffer.
+      setIsVideoLoading(true);
       setTimeout(() => inputRef.current?.focus(), 100);
       messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
     }
@@ -428,13 +436,40 @@ export default function DashboardAI() {
           {/* ── Avatar header ── */}
           <div className="relative flex-shrink-0 overflow-hidden" style={{ height: 230, background: "#f8fafc" }}>
 
-            {/* ── Looping video avatar — instantly visible, no WebRTC handshake ── */}
+            {/* ── Looping video avatar — no WebRTC handshake, instant DOM mount ── */}
             <SimliAvatar
               ref={avatarRef}
               avatarState={avatarState}
+              onVideoReady={() => setIsVideoLoading(false)}
               className="absolute inset-0"
               style={{ zIndex: 2 }}
             />
+
+            {/* ── Loading spinner — shown until video fires onCanPlay ── */}
+            {isVideoLoading && (
+              <div
+                className="absolute inset-0 flex flex-col items-center justify-center gap-3 pointer-events-none"
+                style={{
+                  background: "linear-gradient(160deg,#f0f4f8 0%,#e8eef7 60%,#dfe9f3 100%)",
+                  zIndex: 3,
+                }}
+              >
+                <div className="relative w-14 h-14">
+                  <div className="absolute inset-0 rounded-full border-2 border-violet-300" />
+                  <div
+                    className="absolute inset-0 rounded-full border-2 border-transparent border-t-violet-600"
+                    style={{ animation: "dash-spin 1s linear infinite" }}
+                  />
+                  <div
+                    className="absolute inset-2 rounded-full"
+                    style={{ background: "radial-gradient(circle,rgba(124,58,237,0.1) 0%,transparent 70%)" }}
+                  />
+                </div>
+                <p className="text-[11px] font-semibold text-slate-500 tracking-wide uppercase">
+                  Generating Avatar Sync...
+                </p>
+              </div>
+            )}
 
             {/* State glow border */}
             <div className="absolute inset-0 pointer-events-none transition-all duration-300" style={{
