@@ -319,13 +319,6 @@ export default function DashboardAI(): React.ReactElement {
     [heygenSessionId],
   );
 
-  const enqueueTTS = useCallback((text: string): void => {
-    if (!ttsEnabledRef.current || !text.trim()) return;
-    ttsAbortRef.current = false;
-    ttsQRef.current.push(text.trim());
-    drainTTS();
-  }, [drainTTS]);
-
   const drainTTS = useCallback(async (): Promise<void> => {
     if (ttsRunRef.current) return;
     ttsRunRef.current = true;
@@ -348,6 +341,13 @@ export default function DashboardAI(): React.ReactElement {
       setAvatarState(streamingRef.current ? "thinking" : "idle");
     }
   }, [sendToHeyGen]);
+
+  const enqueueTTS = useCallback((text: string): void => {
+    if (!ttsEnabledRef.current || !text.trim()) return;
+    ttsAbortRef.current = false;
+    ttsQRef.current.push(text.trim());
+    drainTTS();
+  }, [drainTTS]);
 
   // ── Stop all TTS immediately ──────────────────────────────────────────────
   const stopTTS = useCallback((): void => {
