@@ -301,7 +301,7 @@ export default function DashboardAI(): React.ReactElement {
     ttsAbortRef.current = false;
     ttsQRef.current.push(text.trim());
     drainTTS();
-  }, []);
+  }, [drainTTS]);
 
   const drainTTS = useCallback(async (): Promise<void> => {
     if (ttsRunRef.current) return;
