@@ -40,15 +40,17 @@ class Settings(BaseSettings):
     elevenlabs_api_key: str = ""
     elevenlabs_voice_id: str = "21m00Tcm4TlvDq8ikWAM"  # Rachel
 
-    # Cartesia — Text-to-speech (TTS)
+    # Cartesia — Text-to-speech (TTS) [DEPRECATED — using HeyGen now]
     # https://docs.cartesia.ai/build-with-cartesia/tts-models/latest
     cartesia_api_key: str = ""
-    cartesia_voice_id: str = "694f9389-aac1-45b6-b726-9d9369183238"  # Barbershop Man
-    cartesia_model_id: str = "sonic-3.5"  # latest, lowest latency + best quality
-
-    # TTS provider: "elevenlabs" | "cartesia"
-    # Cartesia recommended: 80–150ms first byte (vs ElevenLabs 200–400ms)
+    cartesia_voice_id: str = "694f9389-aac1-45b6-b726-9d9369183238"
+    cartesia_model_id: str = "sonic-3.5"
     tts_provider: str = "cartesia"
+
+    # HeyGen — Interactive Avatar (TTS + lip-sync + animation)
+    # https://docs.heygen.com/reference/interactive-avatar-api
+    heygen_api_key: str
+    heygen_avatar_id: str  # e.g., "78dc3d8016223f50a9bdb4ce"
 
     # CORS
     allowed_origins: list[str] = ["http://localhost:3000"]

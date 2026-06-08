@@ -1,28 +1,23 @@
 "use client";
 /**
- * DashboardAI  —  AI assistant with MuseTalk lip-sync avatar
- * ────────────────────────────────────────────────────────────────────────────
- * Pipeline (per TTS chunk):
- *   1. LLM text token arrives → buffered in ttsPendingRef
- *   2. Text flushed to TTS queue at sentence / punctuation boundaries
- *   3. drainTTS() picks up queue items:
- *      a. PRIMARY: POST /api/v1/conversations/musetalk  (text → lip-sync video)
- *         Backend: text → Cartesia PCM → fal-ai/musetalk → returns {video_url}
- *         Frontend: set musetalkUrl → SimliAvatar loads & plays video (audio baked in)
- *         Spinner shows while backend processes; hides on video onCanPlay.
- *      b. FALLBACK: POST /api/v1/conversations/tts  (text → MP3 blob)
- *         Used when MuseTalk is disabled or the endpoint is unavailable.
- *         Audio-only with waveform bars; avatar loops its idle video.
+ * DashboardAI  —  HeyGen Interactive Avatar Chat
+ * ──────────────────────────────────────────────────────────────────────────
+ * Pipeline:
+ *   1. Panel mounts → POST /heygen/session → get WebRTC stream URL
+ *   2. Frontend renders <SimliAvatar videoStreamUrl={streamUrl} />
+ *   3. User sends message → LLM generates response
+ *   4. Text tokens arrive → buffer in ttsPendingRef
+ *   5. Text flushed at sentence boundaries → POST /heygen/chat
+ *   6. HeyGen synthesizes + animates in real-time
+ *   7. WebRTC stream updates with speaking avatar
+ *   8. When response ends, avatar idle state
  *
- * Spinner states:
- *   isBaseLoading   — true until idle video fires onCanPlay (initial only)
- *   isGenerating    — true while MuseTalk backend is processing a segment
- *   Combined: show spinner when either is true
+ * HeyGen handles:
+ *   - Text-to-speech (TTS)
+ *   - Mouth lip-sync animation
+ *   - Natural avatar expressions
  *
- * Env vars:
- *   NEXT_PUBLIC_API_URL            — backend origin
- *   NEXT_PUBLIC_AVATAR_VIDEO_URL   — override base idle video
- *   NEXT_PUBLIC_MUSETALK_ENABLED   — "true" to activate MuseTalk path
+ * All in one native pipeline — no separate TTS provider, no separate lip-sync.
  */
 
 import { useState, useEffect, useRef, useCallback } from "react";
@@ -30,14 +25,11 @@ import { createClient } from "@/lib/supabase";
 import {
   Mic, MicOff, X, Send, Volume2, VolumeX, RotateCcw, MessageSquare,
 } from "lucide-react";
-import { useAudioLipSync }                        from "@/hooks/useAudioLipSync";
-import { SimliAvatar, type SimliAvatarHandle, BASE_VIDEO_URL } from "./SimliAvatar";
+import { SimliAvatar, type SimliAvatarHandle } from "./SimliAvatar";
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
-const API_URL          = process.env.NEXT_PUBLIC_API_URL          ?? "http://localhost:8000";
-const MUSETALK_ENABLED = process.env.NEXT_PUBLIC_MUSETALK_ENABLED === "true";
-const NUM_WAVE_BARS    = 12;
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
@@ -59,30 +51,9 @@ export default function DashboardAI() {
   const [token, setToken]             = useState("");
   const [ttsEnabled, setTtsEnabled]   = useState(true);
 
-  // ── Spinner states ────────────────────────────────────────────────────────
-  /**
-   * isGenerating — true ONLY while the MuseTalk backend is processing a
-   *                segment.  Shows "Generating Avatar Sync..." and hides
-   *                the avatar area until the lip-sync video is ready.
-   *
-   * isBaseLoading has been intentionally removed.  The idle character video
-   * (SimliAvatar Layer 1) has autoPlay + loop + muted, so the browser starts
-   * playing it the moment the panel mounts — no loading gate is needed.
-   * The old isBaseLoading gate delayed the video by the onCanPlay event and
-   * made the panel look frozen / stuck to the user.
-   */
-  const [isGenerating, setIsGenerating] = useState(false);
-
-  // ── MuseTalk state ────────────────────────────────────────────────────────
-  /**
-   * musetalkUrl — when set, SimliAvatar loads and plays this video URL.
-   * The video contains Cartesia audio baked in by the backend (perfect sync).
-   * Cleared to null once the video's onEnded fires.
-   */
-  const [musetalkUrl, setMusetalkUrl] = useState<string | null>(null);
-
-  // Resolve function for the promise that blocks drainTTS until the video ends
-  const speakEndResolveRef = useRef<(() => void) | null>(null);
+  // ── HeyGen session state ──────────────────────────────────────────────────
+  const [heygenSessionId, setHeygenSessionId]       = useState<string | null>(null);
+  const [heygenVideoStreamUrl, setHeygenVideoStreamUrl] = useState<string | null>(null);
 
   // ── Refs ──────────────────────────────────────────────────────────────────
   const sessionId      = useRef(`dash_${Date.now()}_${Math.random().toString(36).slice(2)}`);
@@ -103,31 +74,10 @@ export default function DashboardAI() {
   useEffect(() => { streamingRef.current   = streaming;  }, [streaming]);
 
   // ── TTS queue refs ────────────────────────────────────────────────────────
-  const audioRef      = useRef<HTMLAudioElement | null>(null);
-  const audioUrlRef   = useRef<string | null>(null);
   const ttsAbortRef   = useRef(false);
   const ttsQRef       = useRef<string[]>([]);
   const ttsRunRef     = useRef(false);
   const ttsPendingRef = useRef("");
-
-  // ── Waveform bars (used by audio-fallback path) ───────────────────────────
-  const waveBarRefs = useRef<(HTMLSpanElement | null)[]>(Array(NUM_WAVE_BARS).fill(null));
-  const { start: startLipSyncAudio, stop: stopLipSyncAudio } = useAudioLipSync();
-
-  const stopLipSync = useCallback(() => {
-    stopLipSyncAudio();
-    waveBarRefs.current.forEach(b => { if (b) b.style.height = "3px"; });
-  }, [stopLipSyncAudio]);
-
-  const startLipSync = useCallback((audioEl: HTMLAudioElement) => {
-    stopLipSync();
-    startLipSyncAudio(audioEl, frame => {
-      frame.bars.forEach((h, i) => {
-        const bar = waveBarRefs.current[i];
-        if (bar) bar.style.height = h + "px";
-      });
-    });
-  }, [stopLipSync, startLipSyncAudio]);
 
   // ── Auth ──────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -141,179 +91,87 @@ export default function DashboardAI() {
     return () => subscription.unsubscribe();
   }, []);
 
-  // ── Panel open: focus + scroll ───────────────────────────────────────────
-  // No spinner reset on open — the idle video plays immediately on mount.
+  // ── Panel open: create HeyGen session ──────────────────────────────────────
+  useEffect(() => {
+    if (!open || !tokenRef.current) return;
+
+    // Create a new HeyGen session when panel opens
+    (async () => {
+      try {
+        const r = await fetch(`${API_URL}/api/v1/conversations/heygen/session`, {
+          method:  "POST",
+          headers: { Authorization: `Bearer ${tokenRef.current}` },
+        });
+        if (!r.ok) {
+          console.error("HeyGen session creation failed:", r.status);
+          return;
+        }
+        const data = await r.json() as {
+          session_id: string;
+          video_stream_url: string;
+        };
+        setHeygenSessionId(data.session_id);
+        setHeygenVideoStreamUrl(data.video_stream_url);
+      } catch (e) {
+        console.error("HeyGen session error:", e);
+      }
+    })();
+
+    // Focus + scroll
+    setTimeout(() => inputRef.current?.focus(), 100);
+  }, [open]);
+
+  // ── Scroll to latest message ──────────────────────────────────────────────
   useEffect(() => {
     if (!open) return;
-    setTimeout(() => inputRef.current?.focus(), 100);
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [open, messages]);
 
-  // ── Audio fallback helper ─────────────────────────────────────────────────
-  /**
-   * Creates an HTMLAudioElement for the given text.
-   *
-   * Priority:
-   *   1. /tts/stream  — backend collects all Cartesia PCM chunks and prepends
-   *                     a 44-byte RIFF/WAV header (16000 Hz · mono · s16le).
-   *                     The browser receives a well-formed WAV blob and decodes
-   *                     it at the correct sample rate — no more slow/robotic
-   *                     playback caused by the browser guessing 44100 Hz.
-   *
-   *   2. /tts         — one-shot MP3 blob from Cartesia /tts/bytes (44100 Hz).
-   *                     Used if the WAV stream endpoint fails or is unavailable.
-   *
-   * Why NOT MediaSource Extensions for WAV:
-   *   MSE does not support audio/wav as a MIME type in any browser.  We use
-   *   the fetch-as-blob → createObjectURL → new Audio() path instead, which
-   *   works for both WAV and MP3 without any MSE SourceBuffer complexity.
-   */
-  const createAudio = useCallback(async (
-    text: string,
-  ): Promise<HTMLAudioElement | null> => {
-    const tok = tokenRef.current;
-    if (!text.trim() || !tok || ttsAbortRef.current) return null;
+  // ── Send text to HeyGen for TTS + animation ───────────────────────────────
+  const sendToHeyGen = useCallback(async (text: string) => {
+    if (!ttsEnabledRef.current || !text.trim() || !heygenSessionId || !tokenRef.current) return;
 
-    const headers = { "Content-Type": "application/json", Authorization: `Bearer ${tok}` };
-    const body    = JSON.stringify({ text });
-
-    // ── Primary: WAV stream (correct sample rate → no robotic distortion) ────
     try {
-      const r = await fetch(`${API_URL}/api/v1/conversations/tts/stream`, {
-        method: "POST", headers, body,
+      const r = await fetch(`${API_URL}/api/v1/conversations/heygen/chat`, {
+        method:  "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${tokenRef.current}`,
+        },
+        body: JSON.stringify({
+          session_id: heygenSessionId,
+          text: text.trim(),
+        }),
       });
 
-      if (r.ok && !ttsAbortRef.current) {
-        const raw = await r.blob();
-
-        // Force audio/wav MIME type regardless of what the server declares.
-        // The /tts/stream endpoint now yields a valid WAV file (44-byte RIFF
-        // header + s16le PCM at 16000 Hz).  Without explicit type="audio/wav"
-        // some browsers fall back to MIME sniffing and may still misidentify
-        // the blob as raw binary data.
-        const blob = new Blob([await raw.arrayBuffer()], { type: "audio/wav" });
-
-        // Minimum viable WAV: 44 bytes header + at least one audio sample.
-        // Anything smaller is likely an upstream error response body.
-        if (blob.size > 44) {
-          const url = URL.createObjectURL(blob);
-          audioUrlRef.current = url;
-          return new Audio(url);
-        }
+      if (!r.ok) {
+        console.error("HeyGen chat failed:", r.status);
       }
-    } catch { /* fall through to MP3 fallback */ }
+    } catch (e) {
+      console.error("HeyGen send error:", e);
+    }
+  }, [heygenSessionId]);
 
-    // ── Fallback: MP3 blob from /tts (44100 Hz) ──────────────────────────────
-    try {
-      const r = await fetch(`${API_URL}/api/v1/conversations/tts`, {
-        method: "POST", headers, body,
-      });
-      if (!r.ok || ttsAbortRef.current) return null;
+  const enqueueTTS = useCallback((text: string) => {
+    if (!ttsEnabledRef.current || !text.trim()) return;
+    ttsAbortRef.current = false;
+    ttsQRef.current.push(text.trim());
+    drainTTS();
+  }, []);
 
-      const raw  = await r.blob();
-      // Force audio/mpeg if the server returns application/octet-stream
-      const blob = raw.type.startsWith("audio")
-        ? raw
-        : new Blob([await raw.arrayBuffer()], { type: "audio/mpeg" });
-      if (blob.size < 500) return null; // reject obvious error-JSON responses
-
-      const url = URL.createObjectURL(blob);
-      audioUrlRef.current = url;
-      return new Audio(url);
-    } catch { return null; }
-
-  }, []); // eslint-disable-line react-hooks/exhaustive-deps
-
-  // ── Stop all TTS / MuseTalk immediately ──────────────────────────────────
-  const stopTTS = useCallback(() => {
-    ttsAbortRef.current    = true;
-    ttsQRef.current        = [];
-    ttsRunRef.current      = false;
-    ttsPendingRef.current  = "";
-    stopLipSync();
-    setIsGenerating(false);
-    setMusetalkUrl(null);
-    speakEndResolveRef.current?.();
-    speakEndResolveRef.current = null;
-    if (audioRef.current)  { audioRef.current.pause(); audioRef.current = null; }
-    if (audioUrlRef.current) { URL.revokeObjectURL(audioUrlRef.current); audioUrlRef.current = null; }
-    setSpeaking(false);
-    setAvatarState(streamingRef.current ? "thinking" : "idle");
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stopLipSync]);
-
-  // ── TTS drain loop ────────────────────────────────────────────────────────
   const drainTTS = useCallback(async () => {
     if (ttsRunRef.current) return;
     ttsRunRef.current = true;
 
     while (ttsQRef.current.length > 0 && !ttsAbortRef.current) {
       const text = ttsQRef.current.shift()!;
-      if (!text.trim()) continue;
-
-      setSpeaking(true);
-      setAvatarState("speaking");
-
-      let handled = false;
-
-      // ── PRIMARY: MuseTalk pipeline ───────────────────────────────────────
-      if (MUSETALK_ENABLED && !ttsAbortRef.current) {
-        setIsGenerating(true); // show "Generating Avatar Sync..." spinner
-
-        try {
-          const tok = tokenRef.current;
-          const res = await fetch(`${API_URL}/api/v1/conversations/musetalk`, {
-            method:  "POST",
-            headers: { "Content-Type": "application/json", Authorization: `Bearer ${tok}` },
-            body:    JSON.stringify({
-              text,
-              base_video_url: BASE_VIDEO_URL,
-            }),
-          });
-
-          if (res.ok && !ttsAbortRef.current) {
-            const data = await res.json() as { video_url?: string };
-
-            if (data.video_url && !ttsAbortRef.current) {
-              // Hand off to SimliAvatar layer 2.
-              // onSpeakVideoReady will hide the spinner (setIsGenerating(false)).
-              // onSpeakVideoEnd will resolve this promise so we advance the queue.
-              setMusetalkUrl(data.video_url);
-
-              await new Promise<void>(resolve => {
-                speakEndResolveRef.current = resolve;
-              });
-
-              setMusetalkUrl(null);
-              handled = true;
-            }
-          }
-        } catch { /* fall through to audio fallback */ }
-
-        setIsGenerating(false);
-      }
-
-      // ── FALLBACK: audio blob + waveform bars ─────────────────────────────
-      if (!handled && !ttsAbortRef.current) {
-        const audio = await createAudio(text);
-        if (audio && !ttsAbortRef.current) {
-          audioRef.current = audio;
-
-          await new Promise<void>(resolve => {
-            audio.oncanplay = () => startLipSync(audio);
-            audio.play().catch(() => { /* autoplay policy — ok */ });
-            audio.onended = () => {
-              stopLipSync();
-              if (audioUrlRef.current) {
-                URL.revokeObjectURL(audioUrlRef.current);
-                audioUrlRef.current = null;
-              }
-              audioRef.current = null;
-              resolve();
-            };
-            audio.onerror = () => { stopLipSync(); resolve(); };
-          });
-        }
+      if (text.trim()) {
+        setSpeaking(true);
+        setAvatarState("speaking");
+        // Send to HeyGen — it handles TTS + animation
+        await sendToHeyGen(text);
+        // Brief delay before next chunk for natural pacing
+        await new Promise(r => setTimeout(r, 500));
       }
     }
 
@@ -321,16 +179,19 @@ export default function DashboardAI() {
     if (ttsQRef.current.length === 0) {
       setSpeaking(false);
       setAvatarState(streamingRef.current ? "thinking" : "idle");
-      setIsGenerating(false);
     }
-  }, [createAudio, startLipSync, stopLipSync]);
+  }, [sendToHeyGen]);
 
-  const enqueueTTS = useCallback((text: string) => {
-    if (!ttsEnabledRef.current || !text.trim()) return;
-    ttsAbortRef.current = false;
-    ttsQRef.current.push(text.trim());
-    drainTTS();
-  }, [drainTTS]);
+  // ── Stop all TTS immediately ──────────────────────────────────────────────
+  const stopTTS = useCallback(() => {
+    ttsAbortRef.current   = true;
+    ttsQRef.current       = [];
+    ttsRunRef.current     = false;
+    ttsPendingRef.current = "";
+    setSpeaking(false);
+    setAvatarState(streamingRef.current ? "thinking" : "idle");
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // ── Chat stream ───────────────────────────────────────────────────────────
   const sendMessage = useCallback(async (text: string) => {
@@ -401,7 +262,7 @@ export default function DashboardAI() {
                 return next;
               });
 
-              // ── Flush text to TTS queue (aggressive for low latency) ────
+              // ── Flush text to HeyGen (aggressive for low latency) ────
               let m: RegExpMatchArray | null;
 
               // 1. Sentence-ending punctuation — flush immediately
@@ -495,9 +356,6 @@ export default function DashboardAI() {
     : streaming                 ? "Thinking…"
     :                             "Ask about your AI agent";
 
-  // Spinner only during MuseTalk processing — never on idle video load
-  const showSpinner = isGenerating;
-
   // ── Render ────────────────────────────────────────────────────────────────
   return (
     <div className="fixed bottom-6 right-6 z-50 flex flex-col items-end gap-3 pointer-events-none">
@@ -510,60 +368,13 @@ export default function DashboardAI() {
           {/* ── Avatar header ─────────────────────────────────────────────── */}
           <div className="relative flex-shrink-0 overflow-hidden" style={{ height: 230, background: "#f8fafc" }}>
 
-            {/*
-              Two-layer avatar:
-                Layer 1 (idleRef):  base Replicate mp4 — muted, autoPlay, loop.
-                                    Plays the instant the panel mounts; no loading
-                                    gate, no spinner.  Character is live immediately.
-                Layer 2 (speakRef): MuseTalk lip-sync video — NOT muted, no loop.
-                                    Shown (opacity 1) only when musetalkUrl is set.
-                                    Dismissed on onEnded; Layer 1 reappears.
-            */}
+            {/* ── HeyGen WebRTC video stream ── */}
             <SimliAvatar
               ref={avatarRef}
-              avatarState={avatarState}
-              musetalkVideoUrl={musetalkUrl}
-              onSpeakVideoReady={() => {
-                // MuseTalk video buffered → dismiss "Generating Avatar Sync..." spinner
-                setIsGenerating(false);
-              }}
-              onSpeakVideoEnd={() => {
-                // MuseTalk video finished → advance the TTS queue
-                speakEndResolveRef.current?.();
-                speakEndResolveRef.current = null;
-              }}
+              videoStreamUrl={heygenVideoStreamUrl}
               className="absolute inset-0"
               style={{ zIndex: 2 }}
             />
-
-            {/* ── Spinner overlay ────────────────────────────────────────────
-                Shown ONLY while MuseTalk backend is processing a segment.
-                The idle video (Layer 1) is always visible — no loading gate.
-            ── */}
-            {showSpinner && (
-              <div
-                className="absolute inset-0 flex flex-col items-center justify-center gap-3 pointer-events-none"
-                style={{
-                  background: "linear-gradient(160deg,#f0f4f8 0%,#e8eef7 60%,#dfe9f3 100%)",
-                  zIndex: 3,
-                }}
-              >
-                <div className="relative w-14 h-14">
-                  <div className="absolute inset-0 rounded-full border-2 border-violet-300" />
-                  <div
-                    className="absolute inset-0 rounded-full border-2 border-transparent border-t-violet-600"
-                    style={{ animation: "dash-spin 1s linear infinite" }}
-                  />
-                  <div
-                    className="absolute inset-2 rounded-full"
-                    style={{ background: "radial-gradient(circle,rgba(124,58,237,0.1) 0%,transparent 70%)" }}
-                  />
-                </div>
-                <p className="text-[11px] font-semibold text-slate-500 tracking-wide uppercase">
-                  {isGenerating ? "Generating Avatar Sync..." : "Loading Avatar..."}
-                </p>
-              </div>
-            )}
 
             {/* State glow border */}
             <div className="absolute inset-0 pointer-events-none transition-all duration-300" style={{
@@ -579,7 +390,7 @@ export default function DashboardAI() {
               style={{ background:"linear-gradient(to bottom,rgba(255,255,255,.7),transparent)", zIndex:11 }}>
               <div>
                 <p className="text-sm font-bold text-slate-800 leading-tight" style={{ textShadow:"0 1px 2px rgba(255,255,255,.8)" }}>Dashboard Assistant</p>
-                <p className="text-[10.5px] text-slate-600">AI Assistant</p>
+                <p className="text-[10.5px] text-slate-600">HeyGen Avatar</p>
               </div>
               <div className="flex items-center gap-1">
                 {speaking && (
@@ -623,14 +434,6 @@ export default function DashboardAI() {
                   animation: avatarState !== "idle" ? "dash-dot-pulse 0.7s ease-in-out infinite" : "none",
                 }} />
                 <span className="text-[10.5px] font-semibold text-slate-700 whitespace-nowrap">{statusLabel}</span>
-              </div>
-              <div className="flex items-end gap-[2.5px] h-6 flex-1 transition-opacity duration-300"
-                style={{ opacity: avatarState==="speaking" || avatarState==="listening" ? 1 : 0 }}>
-                {Array.from({ length: NUM_WAVE_BARS }, (_, i) => (
-                  <span key={i} ref={el => { waveBarRefs.current[i] = el; }}
-                    className="flex-shrink-0 rounded-sm"
-                    style={{ width:3, height:3, background:"rgba(168,85,247,.75)", transition:"height 0.04s linear" }} />
-                ))}
               </div>
               <button onClick={startVoice} title={listening ? "Stop" : "Voice input"}
                 className="w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0 text-white transition"

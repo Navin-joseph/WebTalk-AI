@@ -260,79 +260,90 @@ async def assistant_stream(
     )
 
 
-class _TTSRequest(BaseModel):
+class _HeyGenChatRequest(BaseModel):
+    """Send text to a HeyGen avatar session."""
+
+    session_id: str
     text: str
 
 
-@router.post("/tts")
-async def dashboard_tts(
-    payload: _TTSRequest,
+@router.post("/heygen/session")
+async def heygen_create_session(
     user: TokenPayload = Depends(get_current_user),
 ):
-    """TTS for the Dashboard AI — JWT auth, returns MP3 bytes via configured provider."""
-    from ..voice.tts import get_tts, TTSError
-    from fastapi.responses import Response
+    """
+    Create a HeyGen interactive avatar session.
 
-    text = payload.text.strip()[:500]
-    if not text:
-        raise HTTPException(status_code=400, detail="Text required")
+    Returns:
+        {
+            "session_id": str,
+            "access_token": str,
+            "video_stream_url": str  # WebRTC stream URL for frontend
+        }
+
+    The frontend connects to video_stream_url to receive the WebRTC stream.
+    The backend uses session_id to send text for TTS + animation.
+    """
+    from ..voice.heygen import create_session, HeyGenError
 
     try:
-        tts = get_tts()
-        audio = await tts.synthesize(text)
-    except TTSError as e:
+        session = await create_session()
+    except HeyGenError as e:
         raise HTTPException(status_code=502, detail=str(e)[:300])
-    except Exception:
-        raise HTTPException(status_code=500, detail="TTS failed")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Session creation failed: {str(e)[:200]}")
 
-    return Response(
-        content=audio,
-        media_type="audio/mpeg",
-        headers={"Cache-Control": "no-store", "Content-Length": str(len(audio))},
-    )
+    return {
+        "session_id": session.session_id,
+        "access_token": session.access_token,
+        "video_stream_url": session.video_stream_url,
+    }
 
 
-@router.post("/tts/stream")
-async def dashboard_tts_stream(
-    payload: _TTSRequest,
+@router.post("/heygen/chat")
+async def heygen_send_chat(
+    payload: _HeyGenChatRequest,
     user: TokenPayload = Depends(get_current_user),
 ):
     """
-    Streaming TTS for Dashboard AI.
+    Send text to a HeyGen avatar session for TTS + animation.
 
-    synthesize_stream() now collects all Cartesia raw PCM chunks and wraps
-    them in a standards-compliant 44-byte RIFF/WAV header (16000 Hz · mono ·
-    s16le) before yielding.  The media_type must therefore be audio/wav so the
-    browser (and any downstream consumer such as MuseTalk) reads the sample-
-    rate field from the header rather than guessing 44100 Hz — which was the
-    root cause of the slow-motion / robotic voice distortion.
+    HeyGen handles everything: voice synthesis, lip-sync, natural movements.
+    The avatar speaks + animates in real-time in the WebRTC stream.
+
+    Args:
+        session_id: From the /heygen/session response
+        text: Speech text (e.g., a sentence from the LLM response)
+
+    Returns:
+        {
+            "code": 0,  # 0 = success, non-zero = error
+            "message": str  # status message from HeyGen
+        }
     """
-    from ..voice.tts import get_tts
+    from ..voice.heygen import HeyGenSession, HeyGenError
 
-    text = payload.text.strip()[:500]
-    if not text:
-        raise HTTPException(status_code=400, detail="Text required")
+    session_id = payload.session_id.strip()
+    text = payload.text.strip()[:1000]
 
-    tts = get_tts()
+    if not session_id or not text:
+        raise HTTPException(status_code=400, detail="session_id and text required")
 
-    async def gen():
-        try:
-            async for chunk in tts.synthesize_stream(text):
-                yield chunk
-        except Exception:
-            pass  # caller receives empty body; frontend falls back to /tts MP3
+    try:
+        # Reconstruct the session from the session_id
+        # (In production, you might store sessions in Redis/Supabase for persistence)
+        session = HeyGenSession(
+            session_id=session_id,
+            access_token="",  # token not needed for chat_stream, only for creation
+            video_stream_url="",  # URL not needed for this operation
+        )
+        result = await session.send_text(text)
+    except HeyGenError as e:
+        raise HTTPException(status_code=502, detail=str(e)[:300])
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Chat failed: {str(e)[:200]}")
 
-    return StreamingResponse(
-        gen(),
-        # audio/wav — MUST match the WAV bytes synthesize_stream() yields.
-        # Sending audio/mpeg here while the body is RIFF/WAV causes browsers
-        # to attempt MP3 decoding on WAV data → silent failure or robotic audio.
-        media_type="audio/wav",
-        headers={
-            "Cache-Control":    "no-store",
-            "X-Accel-Buffering": "no",
-        },
-    )
+    return result
 
 
 def _upsert_conversation(db: Client, client_id: str, session_id: str, user_msg: str, ai_msg: str):
