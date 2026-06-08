@@ -39,7 +39,7 @@ export const HeyGenAvatar = forwardRef<HeyGenAvatarHandle, Props>(
       className,
       style,
       onReady,
-    },
+    }: Props,
     ref,
   ) {
     const videoRef = useRef<HTMLVideoElement>(null);
@@ -166,5 +166,7 @@ export const HeyGenAvatar = forwardRef<HeyGenAvatarHandle, Props>(
     );
   },
 );
+
+HeyGenAvatar.displayName = "HeyGenAvatar";
 
 export default HeyGenAvatar;

@@ -218,8 +218,8 @@ export default function DashboardAI(): React.ReactElement {
 
         console.log("[HeyGen] WebRTC handshake complete, waiting for remote tracks...");
         setHeygenPeerConnection(pc);
-      } catch (e) {
-        console.error("[HeyGen] WebRTC setup error:", e);
+      } catch (error: unknown) {
+        console.error("[HeyGen] WebRTC setup error:", error);
         if (pc) pc.close();
       }
     })();
@@ -274,8 +274,8 @@ export default function DashboardAI(): React.ReactElement {
         if (!r.ok) {
           console.error("HeyGen chat failed:", r.status);
         }
-      } catch (e) {
-        console.error("HeyGen send error:", e);
+      } catch (error: unknown) {
+        console.error("HeyGen send error:", error);
       }
     },
     [heygenSessionId],
