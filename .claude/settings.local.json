@@ -11,7 +11,15 @@
       "mcp__8a560380-7201-46f7-ae60-494df8c17897__get_publishable_keys",
       "PowerShell(docker --version)",
       "PowerShell(docker compose version 2>&1)",
-      "PowerShell($content = Get-Content \"N:\\\\WebTalk AI\\\\frontend\\\\public\\\\widget.js\" -Raw; $content.Substring\\(0, 150\\))"
+      "PowerShell($content = Get-Content \"N:\\\\WebTalk AI\\\\frontend\\\\public\\\\widget.js\" -Raw; $content.Substring\\(0, 150\\))",
+      "PowerShell(Set-Location \"N:\\\\WebTalk AI\"; git check-ignore frontend/public/widget.js 2>&1; \"exit code: $LASTEXITCODE\")",
+      "WebFetch(domain:simplehtmlpag.netlify.app)",
+      "WebFetch(domain:api.github.com)",
+      "PowerShell(cd \"N:\\\\WebTalk AI\\\\frontend\"; $env:NEXT_PUBLIC_SUPABASE_URL=\"https://placeholder.supabase.co\"; $env:NEXT_PUBLIC_SUPABASE_ANON_KEY=\"placeholder\"; $env:NEXT_PUBLIC_API_URL=\"https://placeholder.onrender.com\"; npm run build 2>&1)",
+      "mcp__Claude_in_Chrome__tabs_context_mcp",
+      "PowerShell(Get-Command ffmpeg -ErrorAction SilentlyContinue)",
+      "Bash(npm install *)",
+      "Bash(npm run *)"
     ]
   }
 }
