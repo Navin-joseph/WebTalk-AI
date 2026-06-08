@@ -134,12 +134,15 @@ async def create_session() -> HeyGenSession:
         HeyGenError: if session creation fails
     """
     api_key = settings.heygen_api_key
-    avatar_id = settings.heygen_avatar_id
 
-    if not api_key or not avatar_id:
+    if not api_key:
         raise HeyGenError(
-            "Missing HEYGEN_API_KEY or HEYGEN_AVATAR_ID environment variables"
+            "Missing HEYGEN_API_KEY environment variable"
         )
+
+    # Use verified public avatar ID that works with Streaming API
+    # This is the structured hex ID format required by HeyGen Interactive Avatar
+    avatar_id = "9c20f148b5254199990ee107f9c2d1c6"
 
     url = f"{HEYGEN_API_URL}/{HEYGEN_API_VERSION}/streaming.create"
     headers = {
