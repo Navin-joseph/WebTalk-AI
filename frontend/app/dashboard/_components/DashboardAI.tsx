@@ -28,7 +28,30 @@ import {
 } from "lucide-react";
 import { HeyGenAvatar, type HeyGenAvatarHandle } from "./HeyGenAvatar";
 
-// ── Speech Recognition Type Declaration ────────────────────────────────────
+// ── Speech Recognition Type Declarations ──────────────────────────────────
+interface ISpeechRecognitionAlternative {
+  transcript: string;
+  confidence: number;
+}
+
+interface ISpeechRecognitionResult {
+  length: number;
+  isFinal: boolean;
+  [index: number]: ISpeechRecognitionAlternative;
+  item(index: number): ISpeechRecognitionAlternative;
+}
+
+interface ISpeechRecognitionResultList {
+  length: number;
+  [index: number]: ISpeechRecognitionResult;
+  item(index: number): ISpeechRecognitionResult;
+}
+
+interface ISpeechRecognitionEvent extends Event {
+  results: ISpeechRecognitionResultList;
+  resultIndex: number;
+}
+
 interface ISpeechRecognition extends EventTarget {
   continuous: boolean;
   interimResults: boolean;
@@ -36,7 +59,7 @@ interface ISpeechRecognition extends EventTarget {
   onstart: ((this: ISpeechRecognition, ev: Event) => void) | null;
   onend: ((this: ISpeechRecognition, ev: Event) => void) | null;
   onerror: ((this: ISpeechRecognition, ev: Event) => void) | null;
-  onresult: ((this: ISpeechRecognition, ev: SpeechRecognitionEvent) => void) | null;
+  onresult: ((this: ISpeechRecognition, ev: ISpeechRecognitionEvent) => void) | null;
   start(): void;
   stop(): void;
   abort(): void;
@@ -531,7 +554,7 @@ export default function DashboardAI(): React.ReactElement {
       setListening(false);
       setAvatarState("idle");
     };
-    recognition.onresult = (e: SpeechRecognitionEvent): void => {
+    recognition.onresult = (e: ISpeechRecognitionEvent): void => {
       const t = e.results[0]?.[0]?.transcript;
       if (t) sendMessage(t);
     };
