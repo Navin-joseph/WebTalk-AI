@@ -1,14 +1,14 @@
 "use client";
 /**
- * DashboardAI  —  Real-time Simli.ai talking-face AI assistant
+ * DashboardAI  —  AI assistant with looping video avatar
  *
- * Avatar: Simli.ai WebRTC — realistic human face streaming live.
- * Audio plays locally; PCM-16 is sent to Simli for lip sync.
- * Waveform bars driven by local Web Audio analysis.
+ * Avatar: AvatarVideo (SimliAvatar.tsx) — looping video, instant display.
+ *   - idle state   → video paused at frame 0 (mouth closed)
+ *   - active states → video plays in a loop
+ * Audio: Cartesia TTS streamed via MediaSource Extensions.
+ * Waveform bars: driven by local Web Audio analysis.
  *
- * Required env vars (Vercel):
- *   NEXT_PUBLIC_SIMLI_API_KEY
- *   NEXT_PUBLIC_SIMLI_FACE_ID
+ * Env var:  NEXT_PUBLIC_AVATAR_VIDEO_URL  (optional override)
  */
 
 import { useState, useEffect, useRef, useCallback } from "react";
@@ -17,14 +17,11 @@ import {
   Mic, MicOff, X, Send, Volume2, VolumeX, RotateCcw, MessageSquare,
 } from "lucide-react";
 import { useAudioLipSync } from "@/hooks/useAudioLipSync";
-import { blobToPCM16 }    from "@/hooks/useBlobToPCM16";
 import { SimliAvatar, type SimliAvatarHandle } from "./SimliAvatar";
 
 // ── Config ────────────────────────────────────────────────────────────────────
 
-const API_URL   = process.env.NEXT_PUBLIC_API_URL       ?? "http://localhost:8000";
-const SIMLI_KEY = process.env.NEXT_PUBLIC_SIMLI_API_KEY ?? "";
-const SIMLI_FACE= process.env.NEXT_PUBLIC_SIMLI_FACE_ID ?? "";
+const API_URL = process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:8000";
 
 const NUM_WAVE_BARS = 12;
 
@@ -45,7 +42,6 @@ export default function DashboardAI() {
   const [avatarState, setAvatarState] = useState<AvatarState>("idle");
   const [token, setToken]             = useState("");
   const [ttsEnabled, setTtsEnabled]   = useState(true);
-  const [simliReady, setSimliReady]   = useState(false);
 
   const sessionId      = useRef(`dash_${Date.now()}_${Math.random().toString(36).slice(2)}`);
   const messagesEndRef = useRef<HTMLDivElement>(null);
@@ -58,12 +54,10 @@ export default function DashboardAI() {
   const tokenRef      = useRef(token);
   const ttsEnabledRef = useRef(ttsEnabled);
   const streamingRef  = useRef(false);
-  const simliReadyRef = useRef(false);
 
-  useEffect(() => { tokenRef.current    = token;      }, [token]);
+  useEffect(() => { tokenRef.current     = token;      }, [token]);
   useEffect(() => { ttsEnabledRef.current = ttsEnabled; }, [ttsEnabled]);
   useEffect(() => { streamingRef.current  = streaming;  }, [streaming]);
-  useEffect(() => { simliReadyRef.current = simliReady; }, [simliReady]);
 
   // TTS refs
   const audioRef      = useRef<HTMLAudioElement | null>(null);
@@ -76,8 +70,8 @@ export default function DashboardAI() {
   // Waveform bars
   const waveBarRefs = useRef<(HTMLSpanElement | null)[]>(Array(NUM_WAVE_BARS).fill(null));
 
-  // Simli avatar handle
-  const simliRef = useRef<SimliAvatarHandle>(null);
+  // Avatar handle (stub for future MuseTalk integration)
+  const avatarRef = useRef<SimliAvatarHandle>(null);
 
   // Audio analysis — drives waveform bars + sends PCM-16 to Simli for lip sync
   const { start: startLipSyncAudio, stop: stopLipSyncAudio } = useAudioLipSync();
@@ -119,54 +113,43 @@ export default function DashboardAI() {
 
   // ── TTS helpers ───────────────────────────────────────────────────────────
   /**
-   * Create a streaming audio element via MediaSource Extensions.
-   * First audio bytes arrive from /tts/stream in ~100 ms (vs ~500 ms for /tts).
-   * Falls back to a full blob fetch if MSE is unsupported (Safari < 15.4).
-   * When Simli is active we use the blob endpoint so we have the full PCM-16.
+   * Create an audio element for the given text.
+   *
+   * Priority:
+   *   1. MediaSource streaming  — first bytes in ~100 ms (Chrome/Firefox)
+   *   2. Blob fallback          — Safari or if MSE unavailable
+   *
+   * The Simli/PCM-16 path has been removed. Audio is played locally;
+   * the avatar video is driven by avatarState, not audio bytes.
    */
   const createAudio = useCallback(async (
-    text: string
-  ): Promise<{ audio: HTMLAudioElement; getBlob: () => Promise<Blob | null> } | null> => {
+    text: string,
+  ): Promise<HTMLAudioElement | null> => {
     const tok = tokenRef.current;
     if (!text.trim() || !tok || ttsAbortRef.current) return null;
 
-    // ── Simli path: need full blob for PCM-16 conversion ─────────────────
-    if (simliReadyRef.current) {
-      try {
-        const r = await fetch(`${API_URL}/api/v1/conversations/tts`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", Authorization: `Bearer ${tok}` },
-          body: JSON.stringify({ text }),
-        });
-        if (!r.ok || ttsAbortRef.current) return null;
-        const blob = await r.blob();
-        const url  = URL.createObjectURL(blob);
-        audioUrlRef.current = url;
-        return { audio: new Audio(url), getBlob: async () => blob };
-      } catch { return null; }
-    }
+    const headers = { "Content-Type": "application/json", Authorization: `Bearer ${tok}` };
+    const body    = JSON.stringify({ text });
 
-    // ── Streaming path via MediaSource (puppet-warp / no Simli) ──────────
-    const supportsMS = typeof window !== "undefined"
-      && "MediaSource" in window
-      && MediaSource.isTypeSupported("audio/mpeg");
+    // ── MediaSource streaming path (Chrome / Firefox) ─────────────────────
+    const supportsMS =
+      typeof window !== "undefined" &&
+      "MediaSource" in window &&
+      MediaSource.isTypeSupported("audio/mpeg");
 
     if (supportsMS) {
       try {
         const r = await fetch(`${API_URL}/api/v1/conversations/tts/stream`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json", Authorization: `Bearer ${tok}` },
-          body: JSON.stringify({ text }),
+          method: "POST", headers, body,
         });
         if (!r.ok || !r.body || ttsAbortRef.current) throw new Error("stream failed");
 
-        const ms     = new MediaSource();
-        const msUrl  = URL.createObjectURL(ms);
-        const audio  = new Audio(msUrl);
+        const ms    = new MediaSource();
+        const msUrl = URL.createObjectURL(ms);
+        const audio = new Audio(msUrl);
         audio.preload = "auto";
         audioUrlRef.current = msUrl;
 
-        // Pipe stream → SourceBuffer asynchronously (fire & forget)
         ms.addEventListener("sourceopen", async () => {
           let sb: SourceBuffer;
           try { sb = ms.addSourceBuffer("audio/mpeg"); }
@@ -177,9 +160,8 @@ export default function DashboardAI() {
 
           const flush = () => {
             if (busy || !queue.length) {
-              if (!busy && done && ms.readyState === "open") {
+              if (!busy && done && ms.readyState === "open")
                 try { ms.endOfStream(); } catch { /* ignore */ }
-              }
               return;
             }
             busy = true;
@@ -199,22 +181,20 @@ export default function DashboardAI() {
           }
         }, { once: true });
 
-        return { audio, getBlob: async () => null };
+        return audio;
       } catch { /* fall through to blob */ }
     }
 
     // ── Blob fallback (Safari, or if streaming fetch failed) ─────────────
     try {
       const r = await fetch(`${API_URL}/api/v1/conversations/tts`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${tok}` },
-        body: JSON.stringify({ text }),
+        method: "POST", headers, body,
       });
       if (!r.ok || ttsAbortRef.current) return null;
       const blob = await r.blob();
       const url  = URL.createObjectURL(blob);
       audioUrlRef.current = url;
-      return { audio: new Audio(url), getBlob: async () => blob };
+      return new Audio(url);
     } catch { return null; }
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -237,21 +217,14 @@ export default function DashboardAI() {
     let prefetch: ReturnType<typeof createAudio> | null = null;
 
     while (ttsQRef.current.length > 0 && !ttsAbortRef.current) {
-      const text   = ttsQRef.current.shift()!;
-      const result = await (prefetch || createAudio(text));
-      prefetch     = null;
-      if (!result || ttsAbortRef.current) continue;
+      const text  = ttsQRef.current.shift()!;
+      const audio = await (prefetch || createAudio(text));
+      prefetch    = null;
+      if (!audio || ttsAbortRef.current) continue;
 
-      // Start pre-fetching the next sentence immediately
+      // Pre-fetch the next sentence while current one plays
       if (ttsQRef.current.length > 0 && !ttsAbortRef.current)
         prefetch = createAudio(ttsQRef.current[0]);
-
-      const { audio, getBlob } = result;
-
-      // If Simli is active, convert to PCM-16 concurrently
-      const pcm16Promise: Promise<Uint8Array | null> = simliReadyRef.current
-        ? getBlob().then(b => b ? blobToPCM16(b) : null).catch(() => null)
-        : Promise.resolve(null);
 
       setSpeaking(true);
       setAvatarState("speaking");
@@ -259,18 +232,13 @@ export default function DashboardAI() {
 
       await new Promise<void>(resolve => {
         audio.oncanplay = () => startLipSync(audio);
-
-        audio.play()
-          .then(async () => {
-            const pcm16 = await pcm16Promise;
-            if (pcm16 && simliReadyRef.current && !ttsAbortRef.current)
-              simliRef.current?.sendAudio(pcm16);
-          })
-          .catch(() => { /* autoplay policy */ });
-
+        audio.play().catch(() => { /* autoplay policy — ok */ });
         audio.onended = () => {
           stopLipSync();
-          if (audioUrlRef.current) { URL.revokeObjectURL(audioUrlRef.current); audioUrlRef.current = null; }
+          if (audioUrlRef.current) {
+            URL.revokeObjectURL(audioUrlRef.current);
+            audioUrlRef.current = null;
+          }
           audioRef.current = null;
           resolve();
         };
@@ -460,32 +428,13 @@ export default function DashboardAI() {
           {/* ── Avatar header ── */}
           <div className="relative flex-shrink-0 overflow-hidden" style={{ height: 230, background: "#f8fafc" }}>
 
-            {/* ── Simli WebRTC video — full-area, no photo fallback ── */}
+            {/* ── Looping video avatar — instantly visible, no WebRTC handshake ── */}
             <SimliAvatar
-              ref={simliRef}
-              apiKey={SIMLI_KEY}
-              faceId={SIMLI_FACE}
-              onReady={() => setSimliReady(true)}
-              onError={() => setSimliReady(false)}
+              ref={avatarRef}
+              avatarState={avatarState}
               className="absolute inset-0"
               style={{ zIndex: 2 }}
             />
-
-            {/* ── Clean loading screen while WebRTC connects (~3 s) ── */}
-            {!simliReady && (
-              <div className="absolute inset-0 flex flex-col items-center justify-center gap-3 pointer-events-none"
-                style={{ background: "linear-gradient(160deg,#f0f4f8 0%,#e8eef7 60%,#dfe9f3 100%)", zIndex: 1 }}>
-                {/* Animated ring */}
-                <div className="relative w-14 h-14">
-                  <div className="absolute inset-0 rounded-full border-2 border-violet-300" />
-                  <div className="absolute inset-0 rounded-full border-2 border-transparent border-t-violet-600"
-                    style={{ animation: "dash-spin 1s linear infinite" }} />
-                  <div className="absolute inset-2 rounded-full"
-                    style={{ background: "radial-gradient(circle,rgba(124,58,237,0.1) 0%,transparent 70%)" }} />
-                </div>
-                <p className="text-[11px] font-semibold text-slate-500 tracking-wide uppercase">Connecting avatar</p>
-              </div>
-            )}
 
             {/* State glow border */}
             <div className="absolute inset-0 pointer-events-none transition-all duration-300" style={{

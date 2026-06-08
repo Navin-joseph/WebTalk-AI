@@ -1,29 +1,22 @@
 /**
- * SimliAvatar
- * ───────────
- * Real-time talking-face video powered by Simli.ai.
+ * AvatarVideo  (replaces SimliAvatar WebRTC component)
+ * ─────────────────────────────────────────────────────
+ * Displays a looping video avatar with state-driven playback.
+ * Removes all Simli WebRTC handshake, token generation, and ICE
+ * negotiation. The avatar is visible instantly with zero async setup.
  *
- * How it works:
- *   1. Calls Simli's REST API to generate a WebRTC session token.
- *   2. Opens a WebRTC peer connection; Simli streams back a continuous
- *      video of the avatar – idle breathing when quiet, speaking in sync
- *      when audio is fed in.
- *   3. The parent component calls ref.sendAudio(uint8) with PCM-16 audio
- *      (16 kHz, mono, little-endian) to drive the lip movement.
- *   4. Simli's audio output is muted here; the TTS audio is played
- *      locally by DashboardAI so waveform bars + timing still work.
+ * Playback behaviour:
+ *   idle                → video paused at frame 0  (mouth closed)
+ *   thinking / listening / speaking  → video plays in a loop
  *
- * Setup (one-time – takes ~2 minutes):
- *   1. Sign up free at https://app.simli.ai → copy your API key.
- *   2. Create a face:
- *        curl -X POST https://api.simli.ai/createFaceId \
- *          -H "x-simli-key: YOUR_KEY" \
- *          -F "image=@frontend/public/avatar.jpg" \
- *          -F "name=WebTalkAI"
- *      Copy the returned faceId.
- *   3. Add to Vercel env vars:
- *        NEXT_PUBLIC_SIMLI_API_KEY = your-api-key
- *        NEXT_PUBLIC_SIMLI_FACE_ID = your-face-id
+ * Future MuseTalk integration:
+ *   sendAudio(pcm16) will pipe raw PCM-16 bytes (16 kHz mono s16le)
+ *   to the MuseTalk backend once that pipeline is wired up.
+ *   Until then it is a documented no-op stub.
+ *
+ * Env var:
+ *   NEXT_PUBLIC_AVATAR_VIDEO_URL   — override the default video asset.
+ *   Falls back to the bundled Replicate mp4 if not set.
  */
 
 "use client";
@@ -33,179 +26,102 @@ import {
   useEffect,
   useImperativeHandle,
   useRef,
-  useState,
 } from "react";
+
+// ── Config ────────────────────────────────────────────────────────────────────
+
+const AVATAR_VIDEO_URL =
+  process.env.NEXT_PUBLIC_AVATAR_VIDEO_URL ??
+  "https://replicate.delivery/pbxt/L2hFUyTjQUalIvUBRskwEaJLCi1dwbWNMjL1NI9cQNgvMfaX/sun.mp4";
 
 // ── Types ─────────────────────────────────────────────────────────────────────
 
+/** Same handle shape as the old Simli component — DashboardAI needs no import changes. */
 export interface SimliAvatarHandle {
-  /** Send PCM-16 (16 kHz mono, little-endian) Uint8Array to drive lip sync */
+  /**
+   * Feed raw PCM-16 audio (16 kHz mono, little-endian) for lip sync.
+   * Currently a no-op stub — will be wired to MuseTalk when ready.
+   */
   sendAudio(data: Uint8Array): void;
   isReady(): boolean;
 }
 
+type AvatarState = "idle" | "thinking" | "listening" | "speaking";
+
 interface Props {
-  apiKey: string;
-  faceId: string;
-  onReady?: () => void;
-  onError?: (err: Error) => void;
+  /** Current AI state — drives video play / pause. */
+  avatarState: AvatarState;
   className?: string;
   style?: React.CSSProperties;
+
+  // Legacy Simli props — accepted but unused so call sites compile unchanged.
+  apiKey?: string;
+  faceId?: string;
+  onReady?: () => void;
+  onError?: (err: Error) => void;
 }
 
 // ── Component ─────────────────────────────────────────────────────────────────
 
 export const SimliAvatar = forwardRef<SimliAvatarHandle, Props>(
-  function SimliAvatar({ apiKey, faceId, onReady, onError, className, style }, ref) {
-    const videoRef  = useRef<HTMLVideoElement>(null);
-    const audioRef  = useRef<HTMLAudioElement>(null);
-    const clientRef = useRef<import("simli-client").SimliClient | null>(null);
-    const readyRef  = useRef(false);
-
-    const [status, setStatus] = useState<"connecting" | "ready" | "error">("connecting");
+  function AvatarVideo(
+    { avatarState, className, style, onReady },
+    ref,
+  ) {
+    const videoRef = useRef<HTMLVideoElement>(null);
 
     // ── Public handle ─────────────────────────────────────────────────────────
     useImperativeHandle(ref, () => ({
-      sendAudio(data: Uint8Array) {
-        if (readyRef.current && clientRef.current) {
-          try { clientRef.current.sendAudioData(data); } catch { /* ignore */ }
-        }
+      sendAudio(_data: Uint8Array) {
+        // TODO: pipe PCM-16 to MuseTalk when backend integration is complete.
+        // Shape:  16-bit signed little-endian, 16 kHz, mono.
       },
-      isReady() { return readyRef.current; },
+      isReady() { return true; },
     }));
 
-    // ── Init Simli WebRTC ─────────────────────────────────────────────────────
+    // ── Signal ready immediately (no async handshake needed) ─────────────────
     useEffect(() => {
-      if (!apiKey || !faceId) {
-        setStatus("error");
-        return;
-      }
-
-      let cancelled = false;
-
-      (async () => {
-        try {
-          // Dynamic import — keeps Three.js + Simli out of the server bundle
-          const {
-            SimliClient,
-            generateSimliSessionToken,
-            generateIceServers,
-          } = await import("simli-client");
-
-          if (cancelled) return;
-
-          // 1. Get session token from Simli
-          const tokenResp = await generateSimliSessionToken({
-            apiKey,
-            config: {
-              faceId,
-              handleSilence: true,
-              maxSessionLength: 600,
-              maxIdleTime:     600,   // was 120s — extended so it doesn't drop mid-conversation
-              model: "fasttalk",
-            },
-          });
-
-          if (cancelled) return;
-
-          // 2. Get ICE servers (for WebRTC NAT traversal)
-          const iceServers = await generateIceServers(apiKey);
-
-          if (cancelled) return;
-
-          // 3. Both DOM elements must be in the DOM at this point
-          const video = videoRef.current;
-          const audio = audioRef.current;
-          if (!video || !audio) throw new Error("DOM elements not ready");
-
-          // 4. Create and start the client
-          const client = new SimliClient(
-            tokenResp.session_token,
-            video,
-            audio,
-            iceServers
-          );
-
-          // Listen for events
-          client.on("start", () => {
-            if (cancelled) return;
-            readyRef.current = true;
-            setStatus("ready");
-            onReady?.();
-          });
-
-          // Session stopped (idle timeout or network drop) — auto-reconnect
-          client.on("stop", () => {
-            if (cancelled) return;
-            readyRef.current = false;
-            setStatus("connecting");
-            // Reconnect after 1.5 s — creates a fresh session token
-            setTimeout(() => {
-              if (!cancelled) {
-                try { clientRef.current?.stop(); } catch {}
-                clientRef.current = null;
-              }
-            }, 1500);
-          });
-
-          client.on("startup_error", (msg) => {
-            if (cancelled) return;
-            readyRef.current = false;
-            setStatus("error");
-            onError?.(new Error(`Simli startup error: ${msg}`));
-          });
-          client.on("error", (detail) => {
-            if (cancelled) return;
-            console.warn("[SimliAvatar] error:", detail);
-          });
-
-          clientRef.current = client;
-          await client.start();
-
-        } catch (e) {
-          if (!cancelled) {
-            console.warn("[SimliAvatar] init failed:", e);
-            setStatus("error");
-            onError?.(e instanceof Error ? e : new Error(String(e)));
-          }
-        }
-      })();
-
-      return () => {
-        cancelled = true;
-        try { clientRef.current?.stop(); } catch { /* ignore */ }
-        clientRef.current = null;
-        readyRef.current  = false;
-      };
+      onReady?.();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [apiKey, faceId]);
+    }, []);
+
+    // ── State-driven playback ─────────────────────────────────────────────────
+    useEffect(() => {
+      const video = videoRef.current;
+      if (!video) return;
+
+      if (avatarState === "idle") {
+        // Pause on frame 0 — shows a closed-mouth still.
+        video.pause();
+        video.currentTime = 0;
+      } else {
+        // speaking / thinking / listening — play the talking loop.
+        video.play().catch(() => {
+          // Autoplay may be blocked until first user gesture; that's fine —
+          // the video will start on the next interaction.
+        });
+      }
+    }, [avatarState]);
 
     return (
-      <>
-        {/* Simli video stream */}
-        <video
-          ref={videoRef}
-          autoPlay
-          playsInline
-          className={className}
-          style={{
-            display:    "block",
-            width:      "100%",
-            height:     "100%",
-            objectFit:  "cover",
-            opacity:    status === "ready" ? 1 : 0,
-            transition: "opacity 0.6s ease",
-            ...style,
-          }}
-        />
-
-        {/* Muted audio — we play TTS locally for timing; this prevents double sound */}
-        <audio ref={audioRef} autoPlay muted />
-
-        {/* No loading overlay — parent DashboardAI renders the loading screen */}
-      </>
+      <video
+        ref={videoRef}
+        src={AVATAR_VIDEO_URL}
+        muted
+        playsInline
+        loop
+        preload="auto"
+        className={className}
+        style={{
+          display:   "block",
+          width:     "100%",
+          height:    "100%",
+          objectFit: "cover",
+          ...style,
+        }}
+      />
     );
-  }
+  },
 );
 
 export default SimliAvatar;
