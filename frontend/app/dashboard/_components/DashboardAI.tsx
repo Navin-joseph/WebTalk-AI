@@ -159,11 +159,22 @@ export default function DashboardAI() {
 
   // ── Audio fallback helper ─────────────────────────────────────────────────
   /**
-   * Creates an HTMLAudioElement from the MP3 blob endpoint.
+   * Creates an HTMLAudioElement for the given text.
    *
-   * IMPORTANT: We intentionally do NOT use the /tts/stream SSE endpoint here.
-   * That endpoint now returns raw PCM s16le (for MuseTalk) which browsers
-   * cannot play directly. The /tts blob endpoint returns a proper MP3.
+   * Priority:
+   *   1. /tts/stream  — backend collects all Cartesia PCM chunks and prepends
+   *                     a 44-byte RIFF/WAV header (16000 Hz · mono · s16le).
+   *                     The browser receives a well-formed WAV blob and decodes
+   *                     it at the correct sample rate — no more slow/robotic
+   *                     playback caused by the browser guessing 44100 Hz.
+   *
+   *   2. /tts         — one-shot MP3 blob from Cartesia /tts/bytes (44100 Hz).
+   *                     Used if the WAV stream endpoint fails or is unavailable.
+   *
+   * Why NOT MediaSource Extensions for WAV:
+   *   MSE does not support audio/wav as a MIME type in any browser.  We use
+   *   the fetch-as-blob → createObjectURL → new Audio() path instead, which
+   *   works for both WAV and MP3 without any MSE SourceBuffer complexity.
    */
   const createAudio = useCallback(async (
     text: string,
@@ -171,25 +182,54 @@ export default function DashboardAI() {
     const tok = tokenRef.current;
     if (!text.trim() || !tok || ttsAbortRef.current) return null;
 
+    const headers = { "Content-Type": "application/json", Authorization: `Bearer ${tok}` };
+    const body    = JSON.stringify({ text });
+
+    // ── Primary: WAV stream (correct sample rate → no robotic distortion) ────
+    try {
+      const r = await fetch(`${API_URL}/api/v1/conversations/tts/stream`, {
+        method: "POST", headers, body,
+      });
+
+      if (r.ok && !ttsAbortRef.current) {
+        const raw = await r.blob();
+
+        // Force audio/wav MIME type regardless of what the server declares.
+        // The /tts/stream endpoint now yields a valid WAV file (44-byte RIFF
+        // header + s16le PCM at 16000 Hz).  Without explicit type="audio/wav"
+        // some browsers fall back to MIME sniffing and may still misidentify
+        // the blob as raw binary data.
+        const blob = new Blob([await raw.arrayBuffer()], { type: "audio/wav" });
+
+        // Minimum viable WAV: 44 bytes header + at least one audio sample.
+        // Anything smaller is likely an upstream error response body.
+        if (blob.size > 44) {
+          const url = URL.createObjectURL(blob);
+          audioUrlRef.current = url;
+          return new Audio(url);
+        }
+      }
+    } catch { /* fall through to MP3 fallback */ }
+
+    // ── Fallback: MP3 blob from /tts (44100 Hz) ──────────────────────────────
     try {
       const r = await fetch(`${API_URL}/api/v1/conversations/tts`, {
-        method:  "POST",
-        headers: { "Content-Type": "application/json", Authorization: `Bearer ${tok}` },
-        body:    JSON.stringify({ text }),
+        method: "POST", headers, body,
       });
       if (!r.ok || ttsAbortRef.current) return null;
 
-      const rawBlob = await r.blob();
-      // Ensure audio/mpeg MIME type — some servers send application/octet-stream
-      const blob = rawBlob.type.startsWith("audio")
-        ? rawBlob
-        : new Blob([await rawBlob.arrayBuffer()], { type: "audio/mpeg" });
-      if (blob.size < 500) return null; // likely an error JSON, not audio
+      const raw  = await r.blob();
+      // Force audio/mpeg if the server returns application/octet-stream
+      const blob = raw.type.startsWith("audio")
+        ? raw
+        : new Blob([await raw.arrayBuffer()], { type: "audio/mpeg" });
+      if (blob.size < 500) return null; // reject obvious error-JSON responses
 
       const url = URL.createObjectURL(blob);
       audioUrlRef.current = url;
       return new Audio(url);
     } catch { return null; }
+
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── Stop all TTS / MuseTalk immediately ──────────────────────────────────
