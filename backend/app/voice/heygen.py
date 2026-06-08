@@ -148,11 +148,12 @@ async def create_session() -> HeyGenSession:
     }
     payload = {
         "avatar_id": avatar_id,
-        # Enable automatic voice generation for streamed text
-        "voice": {
-            "voice_id": "default",  # HeyGen's default voice for the avatar
-        },
     }
+
+    logger.info(
+        "HeyGen creating session with avatar_id: %s, API URL: %s",
+        avatar_id, url,
+    )
 
     async with httpx.AsyncClient(timeout=30) as client:
         resp = await client.post(url, headers=headers, json=payload)
@@ -162,6 +163,10 @@ async def create_session() -> HeyGenSession:
             logger.error(
                 "HeyGen streaming.create failed HTTP %s: %s",
                 resp.status_code, body[:400],
+            )
+            logger.error(
+                "Request payload was: %s",
+                payload,
             )
             raise HeyGenError(
                 f"HeyGen session creation failed: {resp.status_code}",
