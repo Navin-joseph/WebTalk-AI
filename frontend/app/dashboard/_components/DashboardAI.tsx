@@ -258,6 +258,10 @@ export default function DashboardAI(): React.ReactElement {
         setHeygenPeerConnection(pc);
       } catch (error: unknown) {
         console.error("[HeyGen] WebRTC setup error:", error);
+        if (error instanceof Error) {
+          console.error("[HeyGen] Error message:", error.message);
+          console.error("[HeyGen] Error stack:", error.stack);
+        }
         if (pc) pc.close();
       }
     })();
@@ -314,6 +318,9 @@ export default function DashboardAI(): React.ReactElement {
         }
       } catch (error: unknown) {
         console.error("HeyGen send error:", error);
+        if (error instanceof Error) {
+          console.error("HeyGen send error message:", error.message);
+        }
       }
     },
     [heygenSessionId],
