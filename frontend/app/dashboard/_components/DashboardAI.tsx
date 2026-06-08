@@ -52,8 +52,16 @@ export default function DashboardAI() {
   const [ttsEnabled, setTtsEnabled]   = useState(true);
 
   // ── HeyGen session state ──────────────────────────────────────────────────
+  /**
+   * heygenSessionId — used to send chat messages.
+   * heygenStreamUrl — the WebRTC/media stream endpoint from HeyGen.
+   * heygenAccessToken — authorization token to fetch the stream.
+   * heygenMediaStream — the live video + audio MediaStream (if available).
+   */
   const [heygenSessionId, setHeygenSessionId]       = useState<string | null>(null);
-  const [heygenVideoStreamUrl, setHeygenVideoStreamUrl] = useState<string | null>(null);
+  const [heygenStreamUrl, setHeygenStreamUrl]       = useState<string | null>(null);
+  const [heygenAccessToken, setHeygenAccessToken]   = useState<string | null>(null);
+  const [heygenMediaStream, setHeygenMediaStream]   = useState<MediaStream | null>(null);
 
   // ── Refs ──────────────────────────────────────────────────────────────────
   const sessionId      = useRef(`dash_${Date.now()}_${Math.random().toString(36).slice(2)}`);
@@ -91,33 +99,65 @@ export default function DashboardAI() {
     return () => subscription.unsubscribe();
   }, []);
 
-  // ── Panel open: create HeyGen session ──────────────────────────────────────
+  // ── Panel open: create HeyGen session & establish WebRTC stream ──────────
   useEffect(() => {
     if (!open || !tokenRef.current) return;
 
-    // Create a new HeyGen session when panel opens
+    let isMounted = true; // track if component is still mounted
+
     (async () => {
       try {
+        // Step 1: Create HeyGen session
         const r = await fetch(`${API_URL}/api/v1/conversations/heygen/session`, {
           method:  "POST",
           headers: { Authorization: `Bearer ${tokenRef.current}` },
         });
+
         if (!r.ok) {
-          console.error("HeyGen session creation failed:", r.status);
+          const errorText = await r.text();
+          console.error(
+            `[HeyGen] Session creation failed HTTP ${r.status}:`,
+            errorText.substring(0, 200),
+          );
           return;
         }
+
         const data = await r.json() as {
           session_id: string;
+          access_token: string;
           video_stream_url: string;
         };
-        setHeygenSessionId(data.session_id);
-        setHeygenVideoStreamUrl(data.video_stream_url);
+
+        if (!isMounted) return;
+
+        console.log("[HeyGen] Session created:", data.session_id);
+        console.log("[HeyGen] Stream URL:", data.video_stream_url.substring(0, 80) + "...");
+
+        if (isMounted) {
+          setHeygenSessionId(data.session_id);
+          setHeygenStreamUrl(data.video_stream_url);
+          setHeygenAccessToken(data.access_token);
+
+          console.log("[HeyGen] Stream details passed to avatar component");
+        }
       } catch (e) {
-        console.error("HeyGen session error:", e);
+        console.error("[HeyGen] Session initialization error:", e);
       }
     })();
 
-    // Focus + scroll
+    // Cleanup: stop media tracks when panel closes
+    return () => {
+      isMounted = false;
+      setHeygenMediaStream(null);
+      setHeygenSessionId(null);
+      setHeygenStreamUrl(null);
+      setHeygenAccessToken(null);
+    };
+  }, [open]);
+
+  // ── Focus input on panel open ──────────────────────────────────────────────
+  useEffect(() => {
+    if (!open) return;
     setTimeout(() => inputRef.current?.focus(), 100);
   }, [open]);
 
@@ -368,10 +408,12 @@ export default function DashboardAI() {
           {/* ── Avatar header ─────────────────────────────────────────────── */}
           <div className="relative flex-shrink-0 overflow-hidden" style={{ height: 230, background: "#f8fafc" }}>
 
-            {/* ── HeyGen WebRTC video stream ── */}
+            {/* ── HeyGen WebRTC video stream (with audio) ── */}
             <SimliAvatar
               ref={avatarRef}
-              videoStreamUrl={heygenVideoStreamUrl}
+              mediaStream={heygenMediaStream}
+              streamUrl={heygenStreamUrl}
+              streamAccessToken={heygenAccessToken}
               className="absolute inset-0"
               style={{ zIndex: 2 }}
             />

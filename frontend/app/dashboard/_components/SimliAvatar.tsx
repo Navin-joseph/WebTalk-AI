@@ -2,17 +2,14 @@
 /**
  * AvatarVideo  —  HeyGen Interactive Avatar WebRTC Stream
  * ──────────────────────────────────────────────────────────────────────────
- * Renders a WebRTC video stream from HeyGen that includes:
- *   - Real-time speech synthesis (TTS)
- *   - Mouth movement animation (lip-sync)
- *   - Natural avatar expressions (blinks, nods, etc.)
+ * Receives a MediaStream object (video + audio tracks) from HeyGen and
+ * renders it in a native HTML5 <video> element with audio enabled.
  *
- * The avatar is fully interactive: text sent to the backend is immediately
- * synthesized and animated, streamed back as video.
- *
- * Props:
- *   videoStreamUrl  — WebRTC stream URL from /heygen/session endpoint.
- *                     Pass this URL directly to <video> element.
+ * Key fixes:
+ *   - NOT muted (audio must be audible)
+ *   - videoRef.current.srcObject = mediaStream (not src = string)
+ *   - Audio tracks explicitly enabled
+ *   - Proper MediaStream lifecycle management
  */
 
 import {
@@ -29,12 +26,24 @@ export interface SimliAvatarHandle {
 }
 
 interface Props {
-  /** WebRTC stream URL from HeyGen /heygen/session endpoint */
-  videoStreamUrl?: string | null;
+  /**
+   * MediaStream object from HeyGen containing video + audio tracks.
+   * Not a URL — a live stream object.
+   */
+  mediaStream?: MediaStream | null;
+
+  /**
+   * HeyGen stream URL + access token for fetching the live stream.
+   * If provided, these are used to fetch the actual MediaStream.
+   */
+  streamUrl?: string | null;
+  streamAccessToken?: string | null;
+
   className?: string;
   style?: React.CSSProperties;
 
   // Legacy props — ignored but kept for interface compatibility
+  videoStreamUrl?: string | null;
   avatarState?: string;
   musetalkVideoUrl?: string | null;
   onBaseVideoReady?: () => void;
@@ -49,7 +58,9 @@ interface Props {
 export const SimliAvatar = forwardRef<SimliAvatarHandle, Props>(
   function AvatarVideo(
     {
-      videoStreamUrl,
+      mediaStream,
+      streamUrl,
+      streamAccessToken,
       className,
       style,
       onReady,
@@ -57,13 +68,14 @@ export const SimliAvatar = forwardRef<SimliAvatarHandle, Props>(
     ref,
   ) {
     const videoRef = useRef<HTMLVideoElement>(null);
+    const fetchAbortRef = useRef<AbortController | null>(null);
 
     // ── Public handle ─────────────────────────────────────────────────────────
     useImperativeHandle(ref, () => ({
       sendAudio() {
         // No-op — HeyGen handles audio natively
       },
-      isReady() { return !!videoStreamUrl; },
+      isReady() { return !!mediaStream; },
     }));
 
     // ── Signal ready immediately ──────────────────────────────────────────────
@@ -72,34 +84,120 @@ export const SimliAvatar = forwardRef<SimliAvatarHandle, Props>(
     // eslint-disable-next-line react-hooks/exhaustive-deps
     }, []);
 
-    // ── Update video src when stream URL changes ──────────────────────────────
+    // ── Fetch MediaStream from HeyGen URL if needed ───────────────────────
+    // If streamUrl + token are provided but no mediaStream yet, fetch it.
+    useEffect(() => {
+      if (!streamUrl || !streamAccessToken) return;
+      if (mediaStream) return; // already have a stream
+
+      let isMounted = true;
+
+      (async () => {
+        try {
+          fetchAbortRef.current = new AbortController();
+
+          // Fetch the stream from HeyGen with authentication
+          const res = await fetch(streamUrl, {
+            method:    "GET",
+            headers:   { "Authorization": `Bearer ${streamAccessToken}` },
+            signal:    fetchAbortRef.current.signal,
+          });
+
+          if (!res.ok) {
+            console.error(
+              `[AvatarVideo] Stream fetch failed HTTP ${res.status}:`,
+              res.statusText,
+            );
+            return;
+          }
+
+          if (!isMounted || !res.body) return;
+
+          // Convert the fetch response to a playable format
+          // HeyGen's endpoint returns a media stream (MP4, HLS, etc.)
+          const blob = await res.blob();
+          const objectUrl = URL.createObjectURL(blob);
+
+          if (isMounted) {
+            const video = videoRef.current;
+            if (video) {
+              video.src = objectUrl;
+              video.load();
+              video.play().catch(err => {
+                console.warn("[AvatarVideo] autoplay blocked:", err.message);
+              });
+              console.log("[AvatarVideo] Stream loaded from URL");
+            }
+          }
+        } catch (err) {
+          if (err instanceof Error && err.name === "AbortError") return; // cancelled
+          console.error("[AvatarVideo] Stream fetch error:", err);
+        }
+      })();
+
+      return () => {
+        isMounted = false;
+        fetchAbortRef.current?.abort();
+      };
+    }, [streamUrl, streamAccessToken, mediaStream]);
+
+    // ── Attach MediaStream to video element ─────────────────────────────────
+    // This is the critical fix: WebRTC/live streams use srcObject, not src.
     useEffect(() => {
       const video = videoRef.current;
-      if (!video) return;
+      if (!video || !mediaStream) return;
 
-      if (videoStreamUrl) {
-        video.src = videoStreamUrl;
-        video.load();
-        video.play().catch(() => {
-          // Autoplay blocked — that's ok, user will interact
-        });
-      } else {
-        video.src = "";
-        try { video.load(); } catch { /* ignore */ }
-      }
-    }, [videoStreamUrl]);
+      // Assign the live MediaStream object to the video element.
+      // This includes both video and audio tracks.
+      video.srcObject = mediaStream;
+
+      // Ensure audio tracks are not muted or blocked.
+      const audioTracks = mediaStream.getAudioTracks();
+      audioTracks.forEach(track => {
+        track.enabled = true; // explicitly enable audio
+      });
+
+      const videoTracks = mediaStream.getVideoTracks();
+      videoTracks.forEach(track => {
+        track.enabled = true; // explicitly enable video
+      });
+
+      // Attempt to play. Autoplay may be blocked by browser policy,
+      // but user interaction (clicking send/speak) will trigger playback.
+      video.play().catch(err => {
+        console.warn("[AvatarVideo] autoplay blocked:", err.message);
+        // Not an error — user will interact, triggering playback
+      });
+
+      console.log(
+        "[AvatarVideo] MediaStream attached:",
+        `audio=${audioTracks.length}`,
+        `video=${videoTracks.length}`,
+      );
+
+      // Cleanup: stop all tracks when component unmounts or stream changes.
+      return () => {
+        if (video.srcObject) {
+          const tracks = (video.srcObject as MediaStream).getTracks();
+          tracks.forEach(track => track.stop());
+          video.srcObject = null;
+        }
+      };
+    }, [mediaStream]);
 
     return (
       <video
         ref={videoRef}
-        muted
-        playsInline
+        // CRITICAL: NOT muted — audio must be audible.
+        // If muted={true}, the <audio> tracks are silenced.
         autoPlay
+        playsInline
         style={{
           display:   "block",
           width:     "100%",
           height:    "100%",
           objectFit: "cover",
+          backgroundColor: "#000", // black background while loading
           ...style,
         }}
         className={className}
