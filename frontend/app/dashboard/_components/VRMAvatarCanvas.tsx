@@ -219,7 +219,7 @@ export const VRMAvatarCanvas = forwardRef<VRMAvatarHandle, Props>(
         setVrmLoaded(true);
         onLoaded?.();
         return true;
-      } catch (err) {
+      } catch (err: unknown) {
         console.warn("[VRMAvatarCanvas] VRM load failed:", err);
         onFallback?.();
         return false;
