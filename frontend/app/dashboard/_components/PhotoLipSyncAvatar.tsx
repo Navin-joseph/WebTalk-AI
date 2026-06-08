@@ -77,16 +77,27 @@ async function detectMouthFromImage(
   const sy   = canvasH / natH;
 
   try {
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const FD = (window as any).FaceDetector;
+    // Access FaceDetector from window (both standard and webkit variants)
+    const w = window as Window & {
+      FaceDetector?: new (opts: { maxDetectedFaces: number; fastMode: boolean }) => {
+        detect(img: CanvasImageSource): Promise<Array<{
+          boundingBox: { top: number; left: number; width: number; height: number };
+          landmarks?: Array<{ type: string; location: { x: number; y: number } }>;
+        }>>;
+      };
+    };
+    const FD = w.FaceDetector;
     if (!FD) throw new Error("no FaceDetector");
     const detector = new FD({ maxDetectedFaces: 1, fastMode: false });
     const faces = await detector.detect(img);
     if (!faces.length) throw new Error("no face detected");
 
     const face = faces[0];
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const mouthLM = face.landmarks?.find((l: any) => l.type === "mouth");
+    interface LandmarkType {
+      type: string;
+      location?: { x: number; y: number };
+    }
+    const mouthLM = face.landmarks?.find((l: LandmarkType) => l.type === "mouth");
 
     let centerY: number;
     let mouthW: number;

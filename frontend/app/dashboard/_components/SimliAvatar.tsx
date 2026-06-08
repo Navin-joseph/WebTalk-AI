@@ -30,7 +30,7 @@ interface Props {
   style?: React.CSSProperties;
 
   // Legacy props — ignored but kept for interface compatibility
-  mediaStream?: any;
+  mediaStream?: MediaStream | null;
   videoStreamUrl?: string | null;
   streamUrl?: string | null;
   streamAccessToken?: string | null;
@@ -77,7 +77,7 @@ export const SimliAvatar = forwardRef<SimliAvatarHandle, Props>(
 
       // CRITICAL: Listen for remote tracks from HeyGen
       // When HeyGen sends video+audio, this fires with the remote stream
-      const handleTrack = (event: RTCTrackEvent) => {
+      const handleTrack = (event: RTCTrackEvent): void => {
         console.log(
           "[AvatarVideo] Remote track received:",
           event.track.kind,
@@ -100,7 +100,7 @@ export const SimliAvatar = forwardRef<SimliAvatarHandle, Props>(
             video.srcObject = stream;
 
             // Ensure all tracks are enabled
-            stream.getTracks().forEach(track => {
+            stream.getTracks().forEach((track: MediaStreamTrack) => {
               track.enabled = true;
               console.log(
                 `[AvatarVideo] Track enabled: ${track.kind} (${track.id})`,
@@ -108,14 +108,14 @@ export const SimliAvatar = forwardRef<SimliAvatarHandle, Props>(
             });
 
             // Try to play (may be blocked by autoplay policy)
-            video.play().catch(err => {
+            video.play().catch((err: Error) => {
               console.warn("[AvatarVideo] Autoplay blocked:", err.message);
             });
           }
         }
       };
 
-      const handleConnectionStateChange = () => {
+      const handleConnectionStateChange = (): void => {
         console.log(
           "[AvatarVideo] Connection state:",
           peerConnection.connectionState,
@@ -126,7 +126,7 @@ export const SimliAvatar = forwardRef<SimliAvatarHandle, Props>(
         }
       };
 
-      const handleIceConnectionStateChange = () => {
+      const handleIceConnectionStateChange = (): void => {
         console.log(
           "[AvatarVideo] ICE connection state:",
           peerConnection.iceConnectionState,

@@ -63,26 +63,25 @@ export default function DashboardAI() {
   // ── Refs ──────────────────────────────────────────────────────────────────
   const sessionId      = useRef(`dash_${Date.now()}_${Math.random().toString(36).slice(2)}`);
   const messagesEndRef = useRef<HTMLDivElement>(null);
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const recognitionRef = useRef<any>(null);
+  const recognitionRef = useRef<SpeechRecognition | null>(null);
   const abortRef       = useRef<AbortController | null>(null);
   const inputRef       = useRef<HTMLInputElement>(null);
   const avatarRef      = useRef<SimliAvatarHandle>(null);
 
   // Stable refs that closures can read without stale values
-  const tokenRef      = useRef(token);
-  const ttsEnabledRef = useRef(ttsEnabled);
-  const streamingRef  = useRef(false);
+  const tokenRef      = useRef<string>(token);
+  const ttsEnabledRef = useRef<boolean>(ttsEnabled);
+  const streamingRef  = useRef<boolean>(false);
 
   useEffect(() => { tokenRef.current      = token;      }, [token]);
   useEffect(() => { ttsEnabledRef.current  = ttsEnabled; }, [ttsEnabled]);
   useEffect(() => { streamingRef.current   = streaming;  }, [streaming]);
 
   // ── TTS queue refs ────────────────────────────────────────────────────────
-  const ttsAbortRef   = useRef(false);
+  const ttsAbortRef   = useRef<boolean>(false);
   const ttsQRef       = useRef<string[]>([]);
-  const ttsRunRef     = useRef(false);
-  const ttsPendingRef = useRef("");
+  const ttsRunRef     = useRef<boolean>(false);
+  const ttsPendingRef = useRef<string>("");
 
   // ── Auth ──────────────────────────────────────────────────────────────────
   useEffect(() => {
@@ -430,8 +429,11 @@ export default function DashboardAI() {
       setAvatarState(streamingRef.current ? "thinking" : "idle");
       return;
     }
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const w  = window as any;
+    // Access SpeechRecognition from window (both standard and webkit variants)
+    const w = window as Window & {
+      SpeechRecognition?: typeof SpeechRecognition;
+      webkitSpeechRecognition?: typeof SpeechRecognition;
+    };
     const SR = w.SpeechRecognition ?? w.webkitSpeechRecognition;
     if (!SR) { alert("Speech recognition requires Chrome or Edge."); return; }
     setListening(true);
