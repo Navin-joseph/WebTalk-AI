@@ -297,7 +297,16 @@ async def dashboard_tts_stream(
     payload: _TTSRequest,
     user: TokenPayload = Depends(get_current_user),
 ):
-    """Streaming TTS for Dashboard AI — first audio bytes in ~100 ms."""
+    """
+    Streaming TTS for Dashboard AI.
+
+    synthesize_stream() now collects all Cartesia raw PCM chunks and wraps
+    them in a standards-compliant 44-byte RIFF/WAV header (16000 Hz · mono ·
+    s16le) before yielding.  The media_type must therefore be audio/wav so the
+    browser (and any downstream consumer such as MuseTalk) reads the sample-
+    rate field from the header rather than guessing 44100 Hz — which was the
+    root cause of the slow-motion / robotic voice distortion.
+    """
     from ..voice.tts import get_tts
 
     text = payload.text.strip()[:500]
@@ -311,12 +320,18 @@ async def dashboard_tts_stream(
             async for chunk in tts.synthesize_stream(text):
                 yield chunk
         except Exception:
-            pass
+            pass  # caller receives empty body; frontend falls back to /tts MP3
 
     return StreamingResponse(
         gen(),
-        media_type="audio/mpeg",
-        headers={"Cache-Control": "no-store", "X-Accel-Buffering": "no"},
+        # audio/wav — MUST match the WAV bytes synthesize_stream() yields.
+        # Sending audio/mpeg here while the body is RIFF/WAV causes browsers
+        # to attempt MP3 decoding on WAV data → silent failure or robotic audio.
+        media_type="audio/wav",
+        headers={
+            "Cache-Control":    "no-store",
+            "X-Accel-Buffering": "no",
+        },
     )
 
 

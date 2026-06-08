@@ -61,14 +61,17 @@ export default function DashboardAI() {
 
   // ── Spinner states ────────────────────────────────────────────────────────
   /**
-   * isBaseLoading  — hides base idle video until its onCanPlay fires.
-   *                  Reset only when the panel opens for the first time.
-   * isGenerating   — hides avatar and shows "Generating Avatar Sync..."
-   *                  while the MuseTalk backend processes a segment.
+   * isGenerating — true ONLY while the MuseTalk backend is processing a
+   *                segment.  Shows "Generating Avatar Sync..." and hides
+   *                the avatar area until the lip-sync video is ready.
+   *
+   * isBaseLoading has been intentionally removed.  The idle character video
+   * (SimliAvatar Layer 1) has autoPlay + loop + muted, so the browser starts
+   * playing it the moment the panel mounts — no loading gate is needed.
+   * The old isBaseLoading gate delayed the video by the onCanPlay event and
+   * made the panel look frozen / stuck to the user.
    */
-  const [isBaseLoading, setIsBaseLoading] = useState(true);
-  const [isGenerating, setIsGenerating]   = useState(false);
-  const baseEverLoadedRef                 = useRef(false); // don't re-show spinner on reopen
+  const [isGenerating, setIsGenerating] = useState(false);
 
   // ── MuseTalk state ────────────────────────────────────────────────────────
   /**
@@ -138,19 +141,8 @@ export default function DashboardAI() {
     return () => subscription.unsubscribe();
   }, []);
 
-  // ── Panel open: reset base spinner only on FIRST open ────────────────────
-  // BUG FIX: previously this effect had [open, messages] as deps, which caused
-  // isBaseLoading to reset to true on EVERY incoming message, creating the
-  // infinite "Generating Avatar Sync..." loop.
-  useEffect(() => {
-    if (!open) return;
-    if (!baseEverLoadedRef.current) {
-      // First time opening — show spinner until video fires onCanPlay
-      setIsBaseLoading(true);
-    }
-  }, [open]);
-
-  // Scroll / focus — separate effect so messages don't trigger spinner reset
+  // ── Panel open: focus + scroll ───────────────────────────────────────────
+  // No spinner reset on open — the idle video plays immediately on mount.
   useEffect(() => {
     if (!open) return;
     setTimeout(() => inputRef.current?.focus(), 100);
@@ -503,7 +495,8 @@ export default function DashboardAI() {
     : streaming                 ? "Thinking…"
     :                             "Ask about your AI agent";
 
-  const showSpinner = isBaseLoading || isGenerating;
+  // Spinner only during MuseTalk processing — never on idle video load
+  const showSpinner = isGenerating;
 
   // ── Render ────────────────────────────────────────────────────────────────
   return (
@@ -517,18 +510,21 @@ export default function DashboardAI() {
           {/* ── Avatar header ─────────────────────────────────────────────── */}
           <div className="relative flex-shrink-0 overflow-hidden" style={{ height: 230, background: "#f8fafc" }}>
 
-            {/* ── Two-layer avatar: idle loop (back) + MuseTalk video (front) ── */}
+            {/*
+              Two-layer avatar:
+                Layer 1 (idleRef):  base Replicate mp4 — muted, autoPlay, loop.
+                                    Plays the instant the panel mounts; no loading
+                                    gate, no spinner.  Character is live immediately.
+                Layer 2 (speakRef): MuseTalk lip-sync video — NOT muted, no loop.
+                                    Shown (opacity 1) only when musetalkUrl is set.
+                                    Dismissed on onEnded; Layer 1 reappears.
+            */}
             <SimliAvatar
               ref={avatarRef}
               avatarState={avatarState}
               musetalkVideoUrl={musetalkUrl}
-              onBaseVideoReady={() => {
-                // Mark as ever-loaded so future panel opens don't re-show spinner
-                baseEverLoadedRef.current = true;
-                setIsBaseLoading(false);
-              }}
               onSpeakVideoReady={() => {
-                // MuseTalk video has buffered → hide "Generating Avatar Sync..." spinner
+                // MuseTalk video buffered → dismiss "Generating Avatar Sync..." spinner
                 setIsGenerating(false);
               }}
               onSpeakVideoEnd={() => {
@@ -541,9 +537,8 @@ export default function DashboardAI() {
             />
 
             {/* ── Spinner overlay ────────────────────────────────────────────
-                Shows for two distinct reasons:
-                  isBaseLoading  → initial video buffer  ("Loading...")
-                  isGenerating   → MuseTalk backend work  ("Generating Avatar Sync...")
+                Shown ONLY while MuseTalk backend is processing a segment.
+                The idle video (Layer 1) is always visible — no loading gate.
             ── */}
             {showSpinner && (
               <div
